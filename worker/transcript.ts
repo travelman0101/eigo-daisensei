@@ -20,6 +20,7 @@ const MESSAGES = {
   no_english: "この動画には英語の字幕がありません（ほかの言語の字幕のみ）",
   video_not_found: "動画が見つかりません（非公開・削除済みの可能性があります）",
   provider_limit: "字幕サービスの今月の利用上限に達しました。字幕ファイルの読み込みは使えます",
+  provider_busy: "字幕サービスが混み合っています。少し待ってから再試行してください",
   provider_config: "字幕サービスの設定に問題があります。字幕ファイルの読み込みは使えます",
   provider_error: "字幕サービスが応答しませんでした。しばらくして再試行してください",
 } as const;
@@ -52,6 +53,8 @@ function fromBody(body: SupadataBody, wantLang: string): Fetched {
 
 async function fromStatus(res: Response, wantLang: string): Promise<Fetched> {
   const body = (await res.json().catch(() => ({}))) as SupadataBody;
+  // diagnostics without caption text or keys
+  console.log("supadata", res.status, body.error ?? "", body.lang ?? "", JSON.stringify(body.availableLangs ?? []), Array.isArray(body.content) ? body.content.length : typeof body.content);
   if (res.status === 200) {
     if (body.status && body.status !== "completed") {
       if (body.status === "failed") return err(404, "no_transcript", true);
@@ -62,13 +65,19 @@ async function fromStatus(res: Response, wantLang: string): Promise<Fetched> {
   if (res.status === 202 && body.jobId) return { kind: "pending", jobId: body.jobId };
   if (res.status === 206) return err(404, "no_transcript", true);
   if (res.status === 404 || res.status === 400) return err(404, "video_not_found", true);
-  if (res.status === 429 || res.status === 402) return err(503, "provider_limit");
+  if (res.status === 402) return err(503, "provider_limit");
+  if (res.status === 429) return err(503, "provider_busy");
   if (res.status === 401 || res.status === 403) return err(503, "provider_config");
   return err(502, "provider_error");
 }
 
+/** The free plan allows 1 request per second: a 429 is retried after a short wait. */
 async function supadata(env: Env, path: string): Promise<Response> {
-  return fetch(`${SUPADATA}${path}`, { headers: { "x-api-key": env.SUPADATA_API_KEY ?? "" } });
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(`${SUPADATA}${path}`, { headers: { "x-api-key": env.SUPADATA_API_KEY ?? "" } });
+    if (res.status !== 429 || attempt >= 3) return res;
+    await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+  }
 }
 
 async function startFetch(env: Env, videoId: string, lang: string): Promise<Fetched> {

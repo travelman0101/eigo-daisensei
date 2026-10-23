@@ -69,14 +69,23 @@ describe("transcript", () => {
     expect(urls[1]).toContain("/transcript/job1");
   });
 
+  it("retries a rate-limited request instead of reporting a monthly limit", async () => {
+    const cookie = await login("tr6");
+    let n = 0;
+    vi.stubGlobal("fetch", async () => (++n < 3 ? Response.json({ error: "limit-exceeded" }, { status: 429 }) : Response.json({ lang: "en", content: [{ text: "hi there", offset: 0, duration: 900 }] })));
+    const res = await post("/api/transcript", { videoId: "abcdefghij5" }, cookie, { TRANSCRIPT_MOCK: "0", SUPADATA_API_KEY: "k" });
+    expect(res.status).toBe(200);
+    expect(n).toBe(3);
+  });
+
   it("maps provider errors to short reasons", async () => {
     const cookie = await login("tr5");
     vi.stubGlobal("fetch", async () => Response.json({ error: "transcript-unavailable" }, { status: 206 }));
     const r1 = await post("/api/transcript", { videoId: "abcdefghij2" }, cookie, { TRANSCRIPT_MOCK: "0", SUPADATA_API_KEY: "k" });
     expect(await r1.json()).toMatchObject({ error: "no_transcript" });
-    vi.stubGlobal("fetch", async () => Response.json({ error: "limit-exceeded" }, { status: 429 }));
+    vi.stubGlobal("fetch", async () => Response.json({ error: "upgrade-required" }, { status: 402 }));
     const r2 = await post("/api/transcript", { videoId: "abcdefghij3" }, cookie, { TRANSCRIPT_MOCK: "0", SUPADATA_API_KEY: "k" });
-    expect(r2.status).toBe(503);
+    expect(await r2.json()).toMatchObject({ error: "provider_limit" });
     vi.stubGlobal("fetch", async () => Response.json({ lang: "ja", content: [{ text: "こんにちは", offset: 0, duration: 1000 }] }));
     const r3 = await post("/api/transcript", { videoId: "abcdefghij4" }, cookie, { TRANSCRIPT_MOCK: "0", SUPADATA_API_KEY: "k" });
     expect(await r3.json()).toMatchObject({ error: "no_english" });
