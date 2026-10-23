@@ -9,3 +9,4 @@ playwright-report
 worker-configuration.d.ts
 *.log
 docs/spikes/**/.wrangler
+samples-raw

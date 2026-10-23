@@ -232,3 +232,14 @@ describe("usage", () => {
     expect(j.rows.find((r) => r.kind === "transcript" && r.cached === 1)?.calls).toBe(1);
   });
 });
+
+describe("login return path", async () => {
+  const { safeNext } = await import("../worker/auth");
+  it("allows only same-site paths", () => {
+    expect(safeNext("/import?v=abc&t=300")).toBe("/import?v=abc&t=300");
+    expect(safeNext("//evil.com")).toBe("/");
+    expect(safeNext("/\\evil.com")).toBe("/");
+    expect(safeNext("https://evil.com")).toBe("/");
+    expect(safeNext(undefined)).toBe("/");
+  });
+});

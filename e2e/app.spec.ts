@@ -175,6 +175,20 @@ test.describe("練習", () => {
     await expect(page.getByRole("button", { name: "再生", exact: true })).toBeVisible();
   });
 
+  test("反復回数のあと次の文へ進む（再生回数の保存で反復が戻らない）", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
+    await page.getByRole("tab", { name: /区切ってまねる/ }).click();
+    await page.getByRole("button", { name: "一文" }).click();
+    await page.getByRole("button", { name: "詳しい設定" }).click();
+    const sheet = page.getByRole("dialog", { name: "練習の設定" });
+    await sheet.getByRole("button", { name: "2", exact: true }).first().click();
+    await sheet.getByRole("button", { name: "なし", exact: true }).first().click();
+    await sheet.getByRole("button", { name: "閉じる" }).click();
+    await page.getByRole("button", { name: "再生", exact: true }).click();
+    await expect(page.locator(".sentence-card")).toContainText("2 /", { timeout: 20_000 });
+  });
+
   test("A–B ループ", async ({ page }) => {
     await login(page);
     await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });

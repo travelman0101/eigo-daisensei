@@ -60,7 +60,10 @@ export function Practice({ id }: { id: string }) {
     })();
   }, [id]);
 
-  const adjustOf = useCallback((i: number) => (m && progress?.adjust[m.sentences[i]!.id]) || { s: 0, e: 0 }, [m, progress]);
+  // rebuild units only when a timing correction changes (not on every play count or rating)
+  const adjustKey = JSON.stringify(progress?.adjust ?? {});
+  const adjustMap = useMemo(() => JSON.parse(adjustKey) as Progress["adjust"], [adjustKey]);
+  const adjustOf = useCallback((i: number) => (m && adjustMap[m.sentences[i]!.id]) || { s: 0, e: 0 }, [m, adjustMap]);
 
   const units = useMemo(() => (m && settings ? buildUnits(m.sentences, settings.unit, settings.multiCount, adjustOf) : []), [m, settings?.unit, settings?.multiCount, adjustOf]);
 
