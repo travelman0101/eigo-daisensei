@@ -1,0 +1,7 @@
+# local development only — never set these in production
+DEV_AUTH=1
+AI_MOCK=1
+TRANSCRIPT_MOCK=1
+# real values (production uses `wrangler secret put`)
+# SUPADATA_API_KEY=
+# GOOGLE_CLIENT_SECRET=
