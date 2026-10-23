@@ -19,7 +19,7 @@
     "LIMIT_LOOKUPS_PER_DAY": "300",
     "LIMIT_GUEST_LOOKUPS_PER_DAY": "30",
     "BACKUP_QUOTA_BYTES": "20971520",
-    "GOOGLE_CLIENT_ID": ""
+    "GOOGLE_CLIENT_ID": "495868197541-2gm4csfmg8bp7d4mp1uk3818ska503g5.apps.googleusercontent.com"
   },
   "triggers": { "crons": ["30 19 * * *"] },
   "observability": { "enabled": true }

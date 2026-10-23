@@ -5,6 +5,7 @@ import type { Material } from "../../shared/types";
 import { formatTime, watchUrl } from "../../shared/youtube";
 import { useApp } from "../App";
 import { DictSheet } from "../components/DictSheet";
+import { Recorder } from "../components/Recorder";
 import { db, getKv, getSettings, guard, setKv, type Progress, type Rating, type Settings } from "../lib/db";
 import { markDirty } from "../lib/sync";
 import { Engine, buildUnits, type EngineState } from "../player/engine";
@@ -312,6 +313,9 @@ export function Practice({ id }: { id: string }) {
         <button className={`chip ${panel === "timing" ? "on" : ""}`} onClick={() => setPanel(panel === "timing" ? "none" : "timing")}>
           時刻の補正
         </button>
+      </div>
+      <div style={{ margin: "0 0 12px" }}>
+        <Recorder sentenceId={s.id} onPlayOriginal={() => engine.current?.playUnit(units.findIndex((u) => u.sentence === sIdx))} />
       </div>
 
       {tip && (
