@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { blocksForRange, buildBlocks } from "../shared/blocks";
-import { materialId, rangeSuggestions, sentenceTiming, sentencesInRange, validateRange } from "../shared/material";
+import { edgeExactness, materialId, rangeSuggestions, sentenceTiming, sentencesInRange, validateRange } from "../shared/material";
 import { checkAnswer, clozeFromText, clozeFromWords, normalizeAnswer } from "../shared/quiz";
 import {
   alignPunctuated,
@@ -181,6 +181,16 @@ describe("range edges", () => {
     const r = sentencesInRange(s, 300_000, 600_000);
     expect(r.map((x) => x.edge)).toEqual([true, false, true]);
   });
+  it("tells caption-line edges from estimated ones", () => {
+    const segs = [seg(0, 2000, "Hi there. I went"), seg(2000, 1000, "home.")];
+    const w = wordsFromSegments(segs);
+    const a = sentenceTiming(w, { from: 0, to: 1, text: "", closed: true });
+    const b = sentenceTiming(w, { from: 2, to: 4, text: "", closed: true });
+    expect(edgeExactness([a, b], segs)).toEqual([
+      { start: true, end: false },
+      { start: false, end: true },
+    ]);
+  });
   it("makes stable material ids", async () => {
     expect(await materialId("v", "en", "h", 1, 2)).toBe(await materialId("v", "en", "h", 1, 2));
     expect(await materialId("v", "en", "h", 1, 2)).not.toBe(await materialId("v", "en", "h", 1, 3));
@@ -233,6 +243,31 @@ describe("subtitle files", () => {
       { text: "One two", start: 1000, dur: 1000 },
       { text: "Late", start: 3_600_000, dur: 1000 },
     ]);
+  });
+  it("keeps per-word times from YouTube-style VTT and skips repeated lines", () => {
+    const vtt = [
+      "WEBVTT",
+      "",
+      "00:00:01.000 --> 00:00:03.000 align:start position:0%",
+      "so<00:00:01.400><c> today</c><00:00:02.100><c> we</c>",
+      "",
+      "00:00:03.000 --> 00:00:03.010 align:start position:0%",
+      "so today we",
+      "",
+      "00:00:03.010 --> 00:00:05.000 align:start position:0%",
+      "so today we",
+      "talk<00:00:03.600><c> about</c>",
+    ].join("\n");
+    expect(parseSubtitles(vtt)).toEqual([
+      { text: "so", start: 1000, dur: 400 },
+      { text: "today", start: 1400, dur: 700 },
+      { text: "we", start: 2100, dur: 900 },
+      { text: "talk", start: 3010, dur: 590 },
+      { text: "about", start: 3600, dur: 1400 },
+    ]);
+    // each word is its own caption line, so sentence edges use real times, not estimates
+    const w = wordsFromSegments(parseSubtitles(vtt));
+    expect(sentenceTiming(w, { from: 1, to: 3, text: "", closed: true })).toMatchObject({ start: 1400, end: 3600, timing: "line" });
   });
   it("parses pasted YouTube transcript (both layouts)", () => {
     expect(parsePastedTranscript("Transcript\n0:00\nhello there\n0:04\nbye now")).toEqual([

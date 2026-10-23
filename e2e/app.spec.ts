@@ -51,9 +51,9 @@ test.describe("取り込み", () => {
     await page.getByLabel("文字起こし").fill("0:00\nhello and welcome to the show\n0:04\ntoday we talk about cats\n0:09\nand why they sleep so much\n0:15\nthanks for watching");
     await page.getByRole("button", { name: "この字幕で取り込む" }).click();
     const keep = page.getByRole("button", { name: /このまま/ });
-    await expect(page.locator(".sentence-card").or(keep)).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator(".now").or(keep)).toBeVisible({ timeout: 20_000 });
     if (await keep.isVisible()) await keep.click();
-    await expect(page.locator(".sentence-card")).toContainText(/hello/i);
+    await expect(page.locator(".now")).toContainText(/hello/i);
   });
 
   test("ログイン前は取り込みボタンの代わりにログインを案内", async ({ page }) => {
@@ -72,9 +72,9 @@ test.describe("60 分の動画の 05:00〜10:00 だけを解析", () => {
     await go.click();
     await go.click({ force: true }).catch(() => {}); // double click
     const widen = page.getByRole("button", { name: /文が切れないように広げる/ });
-    await expect(page.locator(".sentence-card").or(widen)).toBeVisible({ timeout: 40_000 });
+    await expect(page.locator(".now").or(widen)).toBeVisible({ timeout: 40_000 });
     if (await widen.isVisible()) await widen.click();
-    await expect(page.locator(".sentence-card")).toBeVisible({ timeout: 40_000 });
+    await expect(page.locator(".now")).toBeVisible({ timeout: 40_000 });
 
     const punct = api.count("/api/analyze/punct");
     const translate = api.count("/api/analyze/translate");
@@ -84,7 +84,7 @@ test.describe("60 分の動画の 05:00〜10:00 だけを解析", () => {
     expect(punct).toBeLessThanOrEqual(9);
     expect(translate).toBeGreaterThan(0);
     // every sentence lies in (or touches) 05:00–10:00
-    const first = await page.locator(".sentence-card .small.muted").first().textContent();
+    const first = await page.locator(".now .small.muted").first().textContent();
     expect(first).toMatch(/[45]:\d\d/);
 
     // re-enter the same URL and range: the saved material opens, nothing is analyzed
@@ -93,9 +93,9 @@ test.describe("60 分の動画の 05:00〜10:00 だけを解析", () => {
     await page.getByLabel("開始").fill("5:00");
     await page.getByLabel("終了").fill("10:00");
     await page.getByRole("button", { name: "保存済みの教材を開く" }).click();
-    await expect(page.locator(".sentence-card")).toBeVisible();
+    await expect(page.locator(".now")).toBeVisible();
     await page.reload();
-    await expect(page.locator(".sentence-card")).toBeVisible();
+    await expect(page.locator(".now")).toBeVisible();
     expect(api.calls.filter((c) => c.path.startsWith("/api/analyze") || c.path === "/api/transcript").length).toBe(0);
   });
 
@@ -123,9 +123,9 @@ test.describe("60 分の動画の 05:00〜10:00 だけを解析", () => {
     await expect(page.getByText("中断しました")).toBeVisible();
     await page.getByRole("button", { name: "続きから再開" }).click();
     const widen = page.getByRole("button", { name: /文が切れないように広げる/ });
-    await expect(page.locator(".sentence-card").or(widen)).toBeVisible({ timeout: 40_000 });
+    await expect(page.locator(".now").or(widen)).toBeVisible({ timeout: 40_000 });
     if (await widen.isVisible()) await widen.click();
-    await expect(page.locator(".sentence-card")).toBeVisible({ timeout: 40_000 });
+    await expect(page.locator(".now")).toBeVisible({ timeout: 40_000 });
     // no block is ever inferred twice: a request aborted in flight may be re-sent, but then the server answers from its cache
     const inferred = api.calls.filter((c) => c.path === "/api/analyze/punct" && c.cached === false).map((c) => c.body);
     expect(new Set(inferred).size).toBe(inferred.length);
@@ -137,10 +137,11 @@ test.describe("練習", () => {
   test("文・まとまり・速度・字幕・訳の切り替えと、位置と設定の復元", async ({ page }) => {
     await login(page);
     await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
-    const card = page.locator(".sentence-card");
+    await page.getByRole("radio", { name: /一文練習/ }).click();
+    const card = page.locator(".now");
     await expect(card).toContainText("1 /");
-    await page.getByRole("button", { name: "次へ" }).click();
-    await page.getByRole("button", { name: "次へ" }).click();
+    await page.getByRole("button", { name: "次の文へ" }).click();
+    await page.getByRole("button", { name: "次の文へ" }).click();
     await expect(card).toContainText("3 /");
     await page.getByRole("button", { name: "まとまり" }).click();
     await expect(page.locator(".en .sep").first()).toBeVisible();
@@ -186,7 +187,7 @@ test.describe("練習", () => {
     await sheet.getByRole("button", { name: "なし", exact: true }).first().click();
     await sheet.getByRole("button", { name: "閉じる" }).click();
     await page.getByRole("button", { name: "再生", exact: true }).click();
-    await expect(page.locator(".sentence-card")).toContainText("2 /", { timeout: 20_000 });
+    await expect(page.locator(".now")).toContainText("2 /", { timeout: 20_000 });
   });
 
   test("A–B ループ", async ({ page }) => {
@@ -206,7 +207,7 @@ test.describe("練習", () => {
     await login(page);
     await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
     const vh = page.viewportSize()!.height;
-    for (const loc of [page.locator(".video"), page.locator(".sentence-card .en"), page.getByRole("button", { name: "再生", exact: true })]) {
+    for (const loc of [page.locator(".video"), page.locator(".now .en"), page.getByRole("button", { name: "再生", exact: true })]) {
       const b = (await loc.boundingBox())!;
       expect(b.y).toBeGreaterThanOrEqual(0);
       expect(b.y + Math.min(b.height, 40)).toBeLessThanOrEqual(vh);
@@ -216,11 +217,127 @@ test.describe("練習", () => {
   });
 });
 
+test.describe("流れモード", () => {
+  const time = (page: import("@playwright/test").Page) => page.evaluate(() => (window as unknown as { __player: { time(): number; playing(): boolean } }).__player.time());
+  const playing = (page: import("@playwright/test").Page) => page.evaluate(() => (window as unknown as { __player: { playing(): boolean } }).__player.playing());
+
+  test("初期は流れモード：止まらず・繰り返さずに文を越えて進み、3 文が見える", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    await expect(page.getByRole("radio", { name: /流れモード/ })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByRole("button", { name: "反復回数" })).toHaveCount(0);
+    await page.getByRole("button", { name: "再生", exact: true }).click();
+    await expect(page.locator(".now")).toContainText("1 /");
+    // mock sentences are ~6 s long: after 14 s we are in the 3rd sentence and the video never paused
+    const seen = new Set<string>();
+    for (let k = 0; k < 14; k++) {
+      await page.waitForTimeout(1000);
+      expect(await playing(page)).toBe(true);
+      seen.add((await page.locator(".now").textContent())!.match(/(\d+) \//)![1]!);
+    }
+    expect(seen.size).toBeGreaterThanOrEqual(3);
+    await expect(page.locator(".flow-s.before")).toBeVisible();
+    await expect(page.locator(".flow-s.after")).toBeVisible();
+    expect(await page.getByText(/話してみよう/).count()).toBe(0);
+  });
+
+  test("前の文へ・文頭へ・次の文へ・字幕タップのあとも流れ続ける", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    await page.getByRole("button", { name: "再生", exact: true }).click();
+    await page.waitForTimeout(8000); // into sentence 2
+    await expect(page.locator(".now")).toContainText("2 /");
+    await page.getByRole("button", { name: "前の文へ" }).click();
+    await expect(page.locator(".now")).toContainText("1 /");
+    await page.waitForTimeout(1500);
+    expect(await playing(page)).toBe(true);
+    await page.getByRole("button", { name: "次の文へ" }).click();
+    await expect(page.locator(".now")).toContainText("2 /");
+    await page.getByRole("button", { name: "今の文の先頭へ" }).click();
+    await page.waitForTimeout(1500);
+    expect(await playing(page)).toBe(true);
+    await page.locator(".flow-s.after").click();
+    await expect(page.locator(".now")).toContainText("3 /");
+    await page.waitForTimeout(7000);
+    expect(await playing(page)).toBe(true);
+    await expect(page.locator(".now")).toContainText("4 /");
+  });
+
+  test("一時停止はその位置から再開し、区間の終わりで止まる", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "0:20", { keepEdges: true });
+    await page.getByRole("button", { name: "再生", exact: true }).click();
+    await page.waitForTimeout(3000);
+    await page.getByRole("button", { name: "停止" }).click();
+    const t = await time(page);
+    await page.waitForTimeout(500);
+    await page.getByRole("button", { name: "再生", exact: true }).click();
+    await page.waitForTimeout(300);
+    const t2 = await time(page);
+    expect(t2).toBeGreaterThanOrEqual(t);
+    expect(t2 - t).toBeLessThan(1000);
+    // run to the end of the 20 s range
+    await expect(page.getByRole("button", { name: "再生", exact: true })).toBeVisible({ timeout: 25_000 });
+    expect(await time(page)).toBeLessThan(23_000);
+  });
+
+  test("一文練習との切り替えで反復の設定が戻り、辞書を開いてもモードは変わらない", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    await page.getByRole("radio", { name: /一文練習/ }).click();
+    await expect(page.getByRole("button", { name: "反復回数" })).toHaveText("×3");
+    await page.getByRole("button", { name: "反復回数" }).click(); // ×4
+    await page.getByRole("radio", { name: /流れモード/ }).click();
+    await expect(page.getByRole("button", { name: "反復回数" })).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole("radio", { name: /流れモード/ })).toHaveAttribute("aria-checked", "true");
+    await page.locator(".now .w").first().click();
+    await page.getByRole("dialog").getByRole("button", { name: "閉じて元の文を再生" }).click();
+    await expect(page.getByRole("radio", { name: /流れモード/ })).toHaveAttribute("aria-checked", "true");
+    await page.waitForTimeout(7000);
+    expect(await playing(page)).toBe(true);
+    await page.getByRole("radio", { name: /一文練習/ }).click();
+    await expect(page.getByRole("button", { name: "反復回数" })).toHaveText("×4");
+  });
+
+  test("教材全体のずらしと文ごとの補正が保存される", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
+    await page.getByRole("button", { name: "時刻の補正" }).click();
+    await page.getByRole("button", { name: "教材全体を0.1 秒遅く" }).click();
+    await page.getByRole("button", { name: "教材全体を0.1 秒遅く" }).click();
+    await expect(page.getByText("教材全体をずらす （+0.2 秒）")).toBeVisible();
+    await page.getByRole("button", { name: /を開始に$/ }).click();
+    await page.waitForTimeout(900);
+    await page.reload();
+    await page.getByRole("button", { name: "時刻の補正" }).click();
+    await expect(page.getByText("教材全体をずらす （+0.2 秒）")).toBeVisible();
+  });
+
+  test("スマホ幅で動画・今の文・前後の文・操作が同時に見える", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    await page.getByRole("button", { name: "次の文へ" }).click();
+    await expect(page.locator(".now")).toContainText("2 /");
+    await page.getByRole("button", { name: "停止" }).click();
+    const vh = page.viewportSize()!.height;
+    const controlsTop = (await page.locator(".controls").boundingBox())!.y;
+    const videoBottom = ((b) => b.y + b.height)((await page.locator(".video").boundingBox())!);
+    // previous, current and next sentence lie between the video and the control bar: nothing is covered
+    for (const loc of [page.locator(".flow-s.before"), page.locator(".now"), page.locator(".flow-s.after")]) {
+      const b = (await loc.boundingBox())!;
+      expect(b.y).toBeGreaterThanOrEqual(videoBottom - 1);
+      expect(b.y + b.height).toBeLessThanOrEqual(controlsTop + 1);
+    }
+    expect(controlsTop).toBeLessThan(vh);
+  });
+});
+
 test.describe("単語帳とテスト", () => {
   test("単語・熟語を保存し、カードと穴埋めでテストできる", async ({ page }) => {
     await login(page);
     await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
-    await page.locator(".sentence-card .w").nth(1).click();
+    await page.locator(".now .w").nth(1).click();
     const sheet = page.getByRole("dialog");
     await expect(sheet.getByText("（意味）")).toBeVisible();
     await expect(sheet.getByText("動画での発言")).toBeVisible();
@@ -259,7 +376,7 @@ test.describe("単語帳とテスト", () => {
   test("アカウントごとに単語帳・教材が分かれる", async ({ page }) => {
     await login(page, `sepA${Date.now()}`);
     await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
-    await page.locator(".sentence-card .w").first().click();
+    await page.locator(".now .w").first().click();
     await page.getByRole("dialog").getByRole("button", { name: "単語帳に保存" }).click();
     await expect(page.getByRole("dialog").getByRole("button", { name: "✓ 単語帳に保存済み" })).toBeVisible();
     await page.goto("/settings");
@@ -280,14 +397,14 @@ test.describe("保存と復元", () => {
   test("AI や通信が止まっても保存済み教材と単語テストが使える", async ({ page }) => {
     await login(page);
     await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
-    await page.locator(".sentence-card .w").first().click();
+    await page.locator(".now .w").first().click();
     await page.getByRole("dialog").getByRole("button", { name: "単語帳に保存" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "閉じる", exact: true }).click();
     const url = page.url();
     await page.route("**/api/**", (r) => r.abort());
     await page.goto(url);
-    await expect(page.locator(".sentence-card")).toBeVisible();
-    await page.getByRole("button", { name: "次へ" }).click();
+    await expect(page.locator(".now")).toBeVisible();
+    await page.getByRole("button", { name: "次の文へ" }).click();
     await page.goto("/vocab/test?type=card&scope=all");
     await page.getByRole("button", { name: "答えを見る" }).click();
     await expect(page.getByRole("button", { name: "覚えていた" })).toBeVisible();
@@ -328,12 +445,12 @@ test.describe("見本・ホーム", () => {
     }
     await page.getByRole("tab", { name: "B1" }).click();
     await page.locator("section").filter({ hasText: "レベル別の見本" }).locator("button.item").first().click();
-    await expect(page.locator(".sentence-card")).toBeVisible();
+    await expect(page.locator(".now")).toBeVisible();
     await expect(page.getByText("B1 の目安")).toBeVisible();
     await expect(page.getByText(/出典:/)).toBeVisible();
     // a sample link works on a device that never opened it
     await page.goto("/m/sample_c1-nasa-landers");
-    await expect(page.locator(".sentence-card")).toContainText("1 /");
+    await expect(page.locator(".now")).toContainText("1 /");
   });
 
   test("デスクトップ幅の表示 @desktop", async ({ page }) => {

@@ -88,6 +88,7 @@ async function startFetch(env: Env, videoId: string, lang: string): Promise<Fetc
   if (!env.SUPADATA_API_KEY) return err(503, "provider_config");
   // mode=native: only captions that already exist on YouTube (AI-generated transcripts cost more credits)
   const q = new URLSearchParams({ url: `https://www.youtube.com/watch?v=${videoId}`, lang, mode: "native" });
+  if (env.SUPADATA_CHUNK_SIZE) q.set("chunkSize", env.SUPADATA_CHUNK_SIZE);
   return fromStatus(await supadata(env, `?${q}`), lang);
 }
 
@@ -107,7 +108,7 @@ async function cached(db: D1Database, videoId: string, lang: string): Promise<Tr
     .bind(videoId, lang, Date.now())
     .first<{ hash: string; source: string; segments: string; available_langs: string }>();
   if (!row) return null;
-  return { videoId, lang, hash: row.hash, source: row.source as Transcript["source"], segments: JSON.parse(row.segments), availableLangs: JSON.parse(row.available_langs) };
+  return { videoId, lang: lang.split("#")[0]!, hash: row.hash, source: row.source as Transcript["source"], segments: JSON.parse(row.segments), availableLangs: JSON.parse(row.available_langs) };
 }
 
 export const transcripts = new Hono<AppEnv>();
@@ -119,7 +120,9 @@ transcripts.post("/", async (c) => {
   if (!ID.test(videoId)) return c.json({ error: "invalid", message: "動画 ID が正しくありません" }, 400);
   const db = c.env.DB;
 
-  const hit = await cached(db, videoId, lang);
+  // the cache row is per request variant, so a change of chunk size never mixes old and new segments
+  const cacheLang = c.env.SUPADATA_CHUNK_SIZE ? `${lang}#c${c.env.SUPADATA_CHUNK_SIZE}` : lang;
+  const hit = await cached(db, videoId, cacheLang);
   if (hit) {
     await logUsage(c, { kind: "transcript", cached: true });
     return c.json({ transcript: hit, cached: true });
@@ -160,7 +163,7 @@ transcripts.post("/", async (c) => {
       `INSERT INTO transcripts (video_id, lang, hash, source, segments, available_langs, fetched_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(video_id, lang) DO UPDATE SET hash = excluded.hash, segments = excluded.segments, fetched_at = excluded.fetched_at, expires_at = excluded.expires_at`,
     )
-    .bind(videoId, lang, hash, "supadata", JSON.stringify(result.segments), JSON.stringify(result.availableLangs), Date.now(), Date.now() + CACHE_TTL)
+    .bind(videoId, cacheLang, hash, "supadata", JSON.stringify(result.segments), JSON.stringify(result.availableLangs), Date.now(), Date.now() + CACHE_TTL)
     .run();
   return c.json({ transcript, cached: false });
 });

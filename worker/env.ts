@@ -15,6 +15,8 @@ export interface Env {
   GOOGLE_CLIENT_SECRET?: string;
   /** transcript provider key (wrangler secret) */
   SUPADATA_API_KEY?: string;
+  /** max characters per caption chunk asked from Supadata; unset = provider default */
+  SUPADATA_CHUNK_SIZE?: string;
   /** "1" enables /api/auth/dev-login. Local development and tests only. */
   DEV_AUTH?: string;
   /** "1" returns canned AI responses. Local development and E2E only. */

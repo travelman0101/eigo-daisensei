@@ -57,6 +57,11 @@ export class Engine {
   state: EngineState = { phase: "idle", unit: 0, rep: 0, gapUntil: null, gapMs: 0, ab: null, continuous: false };
   private timer: unknown = null;
   private stopTimer: unknown = null;
+  /**
+   * Flow mode: play straight through the range. The highlight follows the time; nothing stops,
+   * repeats or waits, and moving to another sentence keeps playing from there.
+   */
+  private flow = false;
 
   constructor(
     private player: PlayerLike,
@@ -73,6 +78,21 @@ export class Engine {
     this.units = units;
     const i = keepSentence == null ? 0 : Math.max(0, units.findIndex((u, k) => u.sentence >= keepSentence || k === units.length - 1));
     this.set({ unit: Math.min(i, Math.max(0, units.length - 1)), rep: 0 });
+  }
+
+  setFlow(on: boolean) {
+    this.flow = on;
+    // a pending stop, repeat or wait from one-sentence practice must not fire after switching
+    this.clearTimers();
+    if (this.state.phase === "gap") {
+      this.player.pause();
+      this.set({ phase: "idle", gapUntil: null });
+    }
+    this.set({ continuous: on, rep: 0 });
+  }
+
+  isFlow() {
+    return this.flow;
   }
 
   setSettings(s: EngineSettings) {
@@ -109,7 +129,7 @@ export class Engine {
     this.clearTimers();
     this.player.seek(this.startOf(u));
     this.player.play();
-    this.set({ phase: "playing", unit: i, rep: keepRep ? this.state.rep : 0, gapUntil: null, continuous: false });
+    this.set({ phase: "playing", unit: i, rep: keepRep ? this.state.rep : 0, gapUntil: null, continuous: this.flow });
   }
 
   /** Plays the whole range straight through from the given unit (or the start). */
@@ -125,6 +145,15 @@ export class Engine {
   }
 
   toggle() {
+    if (this.state.phase === "idle" && this.flow) {
+      // resume exactly where it paused; only outside the range does it jump to a sentence start
+      const t = this.player.time();
+      if (t >= this.range.start - 1000 && t < this.range.end - 200) {
+        this.player.play();
+        this.set({ phase: "playing", unit: this.unitAt(t), continuous: true });
+      } else this.playUnit(t >= this.range.end - 200 ? 0 : this.unitAt(t));
+      return;
+    }
     if (this.state.phase === "idle") {
       // resume where the video is if it is still inside the unit, otherwise start the unit again
       const u = this.units[this.state.unit];
@@ -136,14 +165,24 @@ export class Engine {
     } else this.pause();
   }
 
+  /** In flow mode the current unit is the one being heard, not the last one started. */
+  private current() {
+    return this.flow ? this.unitAt(this.player.time()) : this.state.unit;
+  }
+
   next() {
-    if (this.state.unit < this.units.length - 1) this.playUnit(this.state.unit + 1);
+    const cur = this.current();
+    if (cur < this.units.length - 1) this.playUnit(cur + 1);
   }
   prev() {
-    this.playUnit(Math.max(0, this.state.unit - 1));
+    this.playUnit(Math.max(0, this.current() - 1));
   }
   restart() {
-    this.playUnit(this.state.unit);
+    this.playUnit(this.current());
+  }
+  /** Back to the first sentence of the range. */
+  toStart() {
+    this.playUnit(0);
   }
 
   setAB(a: number, b: number) {
@@ -155,13 +194,15 @@ export class Engine {
     this.set({ phase: "playing", rep: 0 });
   }
   clearAB() {
-    this.set({ ab: null });
+    // flow continues from where the loop is now; one-sentence practice keeps its unit
+    this.set({ ab: null, unit: this.flow ? this.unitAt(this.player.time()) : this.state.unit });
   }
 
   /** Index of the unit at time t (for highlighting during continuous play). */
   unitAt(t: number) {
+    // the next sentence takes over at its start (not before), so the highlight never runs ahead
     let lo = 0;
-    for (let i = 0; i < this.units.length; i++) if (this.units[i]!.start - 60 <= t) lo = i;
+    for (let i = 0; i < this.units.length; i++) if (this.units[i]!.start <= t) lo = i;
     return lo;
   }
 
@@ -171,7 +212,7 @@ export class Engine {
     const { ab } = this.state;
     const u = this.units[this.state.unit];
     if (!u) return;
-    const flowing = this.state.continuous || (this.settings.mode === "listen" && !this.settings.autoStop);
+    const flowing = this.flow || this.state.continuous || (this.settings.mode === "listen" && !this.settings.autoStop);
     let end: number;
     if (ab) end = ab.b;
     else if (flowing) {
@@ -203,9 +244,10 @@ export class Engine {
       this.set({ rep });
       return;
     }
-    if (this.state.continuous || (s.mode === "listen" && !s.autoStop)) {
+    if (this.flow || this.state.continuous || (s.mode === "listen" && !s.autoStop)) {
+      // the end of the range
       this.player.pause();
-      this.set({ phase: "idle", continuous: false });
+      this.set({ phase: "idle", continuous: this.flow });
       return;
     }
     if (s.mode === "listen") {

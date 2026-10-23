@@ -58,5 +58,5 @@ export async function importRange(page: Page, videoId: string, start: string, en
   const keep = page.getByRole("button", { name: /このまま/ });
   await expect(page.locator(".en").first().or(widen)).toBeVisible({ timeout: 30_000 });
   if (await widen.isVisible()) await (opts.keepEdges ? keep : widen).click();
-  await expect(page.locator(".sentence-card")).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator(".now")).toBeVisible({ timeout: 30_000 });
 }

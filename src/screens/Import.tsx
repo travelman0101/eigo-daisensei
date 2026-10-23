@@ -410,7 +410,7 @@ export function Import() {
         <section className="glass card">
           <h2>字幕が取れないとき</h2>
           <p className="small muted" style={{ marginTop: -4 }}>
-            利用してよい字幕ファイル（SRT / VTT）か、YouTube の「文字起こしを表示」の内容を貼り付けて、この動画に紐づけられます。
+            利用してよい字幕ファイル（SRT / VTT）か、YouTube の「文字起こしを表示」の内容を貼り付けて、この動画に紐づけられます。単語ごとの時刻が入った VTT（YouTube の自動字幕の形式）なら、その時刻をそのまま使います。
           </p>
           <div className="chips">
             <button className={`chip ${fallback === "file" ? "on" : ""}`} onClick={() => setFallback(fallback === "file" ? "none" : "file")}>

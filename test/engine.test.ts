@@ -127,6 +127,96 @@ describe("engine", () => {
   });
 });
 
+describe("flow mode", () => {
+  it("plays across several sentences without pausing, repeating or seeking", () => {
+    const r = rig({ mode: "repeat", repeats: 3, gapMode: "ratio" });
+    r.engine.setFlow(true);
+    r.engine.playUnit(0);
+    r.advance(4400); // 1000 → 5400: through units 0 and 1 and the natural pause before unit 2
+    expect(r.log.filter((l) => l.startsWith("pause"))).toEqual([]);
+    expect(r.log.filter((l) => l.startsWith("seek"))).toEqual(["seek@1000"]);
+    expect(r.engine.state).toMatchObject({ phase: "playing", unit: 2, rep: 0 });
+  });
+
+  it("highlights a sentence only once its start is reached", () => {
+    const r = rig();
+    r.engine.setFlow(true);
+    r.engine.playUnit(0);
+    r.advance(990); // t = 1990, unit 1 starts at 2000
+    expect(r.engine.state.unit).toBe(0);
+    r.advance(20);
+    expect(r.engine.state.unit).toBe(1);
+  });
+
+  it("previous / same / next sentence seek and keep playing", () => {
+    const r = rig();
+    r.engine.setFlow(true);
+    r.engine.playUnit(0);
+    r.advance(1500); // in unit 1
+    r.engine.prev();
+    expect(r.log.at(-2)).toBe("seek@1000");
+    expect(r.engine.state).toMatchObject({ phase: "playing", unit: 0, continuous: true });
+    r.advance(1200); // unit 1 again
+    r.engine.restart();
+    expect(r.log.at(-2)).toBe("seek@2000");
+    r.engine.next();
+    expect(r.log.at(-2)).toBe("seek@5000");
+    r.advance(300);
+    expect(r.engine.state.phase).toBe("playing");
+  });
+
+  it("pause resumes at the same position", () => {
+    const r = rig();
+    r.engine.setFlow(true);
+    r.engine.playUnit(0);
+    r.advance(1700);
+    r.engine.toggle();
+    const t = r.t;
+    r.engine.toggle();
+    expect(r.engine.state.phase).toBe("playing");
+    expect(r.log.filter((l) => l.startsWith("seek")).length).toBe(1);
+    expect(r.t).toBe(t);
+  });
+
+  it("stops at the end of the range and starts over from the first sentence", () => {
+    const r = rig();
+    r.engine.setFlow(true);
+    r.engine.playUnit(2);
+    r.advance(1100);
+    expect(r.engine.state.phase).toBe("idle");
+    expect(Math.abs(r.t - 6000)).toBeLessThanOrEqual(60);
+    r.engine.toggle();
+    expect(r.log.at(-2)).toBe("seek@1000");
+  });
+
+  it("switching from a repetition wait to flow cancels the wait timer", () => {
+    const r = rig({ mode: "repeat", repeats: 3, gapMode: "fixed", gapFixed: 2 });
+    r.engine.playUnit(0);
+    r.advance(1000);
+    expect(r.engine.state.phase).toBe("gap");
+    r.engine.setFlow(true);
+    expect(r.engine.state.phase).toBe("idle");
+    r.advance(3000);
+    expect(r.engine.state.phase).toBe("idle"); // the old wait never restarted the sentence
+    r.engine.setFlow(false);
+    r.engine.playUnit(0);
+    r.advance(1000);
+    expect(r.engine.state).toMatchObject({ phase: "gap", rep: 1 }); // repetition settings still apply
+  });
+
+  it("releasing an A–B loop continues the flow from the current position", () => {
+    const r = rig();
+    r.engine.setFlow(true);
+    r.engine.setAB(2200, 2800);
+    r.advance(900);
+    r.engine.clearAB();
+    const seeks = r.log.filter((l) => l.startsWith("seek")).length;
+    r.advance(2000);
+    expect(r.log.filter((l) => l.startsWith("seek")).length).toBe(seeks);
+    expect(r.engine.state.phase).toBe("playing");
+  });
+});
+
 describe("buildUnits", () => {
   const sents = [
     { start: 0, end: 3000, words: [0, 1, 2, 3].map((k) => ({ start: k * 750, end: (k + 1) * 750 })), chunks: [0, 2] },

@@ -668,3 +668,123 @@ table.usage th:first-child {
     height: 30vh;
   }
 }
+
+/* flow / one-sentence switch */
+.seg {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  margin: 10px 0 4px;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.06);
+}
+.seg button {
+  flex: 1;
+  min-height: 44px;
+  border: none;
+  border-radius: 12px;
+  background: transparent;
+  font-weight: 800;
+  font-size: 15px;
+  color: var(--ink-2);
+  line-height: 1.1;
+}
+.seg button small {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.seg button.on {
+  background: #fff;
+  color: var(--accent);
+  box-shadow: var(--shadow);
+}
+
+/* three sentences: before / now / after */
+.flow-view {
+  display: grid;
+  gap: 6px;
+}
+.flow-s {
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition:
+    background 0.25s var(--ease),
+    opacity 0.25s var(--ease),
+    transform 0.25s var(--ease);
+  -webkit-tap-highlight-color: transparent;
+}
+.flow-s.blank {
+  min-height: 8px;
+  padding: 0;
+}
+.flow-s.before,
+.flow-s.after {
+  opacity: 0.62;
+}
+.flow-s.before .en,
+.flow-s.after .en {
+  font-size: 16px;
+  font-weight: 500;
+}
+.flow-s.cur {
+  background: var(--glass-strong);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+}
+.flow-s.cur .en {
+  font-size: 20px;
+}
+.flow-s:active {
+  transform: scale(0.99);
+}
+.follow-btn {
+  position: sticky;
+  bottom: 160px;
+  margin: 8px auto 0;
+  display: flex;
+  z-index: 5;
+  background: var(--glass-strong);
+  box-shadow: var(--shadow);
+}
+.flow-s.before .en,
+.flow-s.after .en {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.flow-s.before,
+.flow-s.after {
+  padding: 6px 14px;
+}
+.seg {
+  margin-top: 8px;
+}
+.seg button {
+  min-height: 44px;
+  font-size: 14px;
+}
+.seg {
+  margin: 6px 0 2px;
+}
+.seg button {
+  min-height: 42px;
+}
+.steps {
+  margin: 6px 0 6px;
+}
+.flow-s.cur {
+  padding: 10px 14px;
+}
+.flow-s.cur .en {
+  font-size: 19px;
+  line-height: 1.5;
+}
+.flow-s.cur .ja {
+  margin-top: 4px;
+  font-size: 14px;
+}

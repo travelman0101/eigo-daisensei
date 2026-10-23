@@ -90,3 +90,21 @@ export function wordsPerMinute(sentences: Pick<Sentence, "words" | "start" | "en
   const ms = sentences.reduce((n, s) => n + (s.end - s.start), 0);
   return ms > 0 ? Math.round(words / (ms / 60000)) : 0;
 }
+
+/**
+ * Whether each sentence edge sits on a caption line boundary (a time given by the captions) or
+ * inside a line (a time estimated from the words). Only estimated edges get the extra margin.
+ */
+export function edgeExactness(sentences: Pick<Sentence, "start" | "end">[], segments: Segment[]): { start: boolean; end: boolean }[] {
+  const starts = new Set<number>();
+  const ends = new Set<number>();
+  segments.forEach((g, i) => {
+    const next = segments[i + 1];
+    let end = g.start + Math.max(g.dur, 1);
+    if (next && next.start > g.start && next.start < end) end = next.start;
+    starts.add(Math.round(g.start));
+    ends.add(Math.round(end));
+  });
+  const near = (set: Set<number>, t: number) => [...set].some((x) => Math.abs(x - t) <= 5);
+  return sentences.map((s) => ({ start: near(starts, s.start), end: near(ends, s.end) }));
+}

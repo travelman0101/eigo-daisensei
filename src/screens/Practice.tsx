@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { edgeExactness } from "../../shared/material";
 import type { Material } from "../../shared/types";
 import { formatTime, watchUrl } from "../../shared/youtube";
 import { useApp } from "../App";
@@ -13,12 +14,13 @@ import { Engine, buildUnits, type EngineState } from "../player/engine";
 import { createYouTube, type PlayerLike } from "../player/yt";
 
 /** The suggested practice flow. Each step only presets settings; any step can be skipped or changed. */
+// Flow steps never touch the repetition settings, so one-sentence practice gets them back unchanged.
 export const STEPS: { n: number; name: string; hint: string; preset: Partial<Settings> }[] = [
-  { n: 1, name: "聞く", hint: "字幕なしで内容と話し方をつかむ", preset: { mode: "listen", autoStop: false, unit: "sentence", showEn: false, showJa: false } },
-  { n: 2, name: "意味を確認", hint: "一文ずつ止めて字幕・訳・単語を見る", preset: { mode: "listen", autoStop: true, unit: "sentence", showEn: true, showJa: true } },
-  { n: 3, name: "区切ってまねる", hint: "止まったら声に出す（リピーティング）", preset: { mode: "repeat", unit: "chunk", repeats: 3, gapMode: "ratio", gapRatio: 1, showEn: true, showJa: false } },
-  { n: 4, name: "追いかけて話す", hint: "止めずに少し遅れてまねる（シャドーイング）", preset: { mode: "shadow", unit: "sentence", repeats: 3, showEn: true, showJa: false } },
-  { n: 5, name: "字幕なし", hint: "字幕を隠して一文〜数文で", preset: { mode: "shadow", unit: "multi", multiCount: 2, repeats: 2, showEn: false, showJa: false } },
+  { n: 1, name: "聞く", hint: "字幕なしで最後まで聞いて、内容と話し方をつかむ", preset: { practice: "flow", showEn: false, showJa: false } },
+  { n: 2, name: "意味を確認", hint: "一文ずつ止めて字幕・訳・単語を見る", preset: { practice: "single", mode: "listen", autoStop: true, unit: "sentence", showEn: true, showJa: true } },
+  { n: 3, name: "区切ってまねる", hint: "止まったら声に出す（リピーティング）", preset: { practice: "single", mode: "repeat", unit: "chunk", showEn: true, showJa: false } },
+  { n: 4, name: "追いかけて話す", hint: "止めずに少し遅れてまねる（シャドーイング）。追いつけなければ「前の文へ」", preset: { practice: "flow", showEn: true, showJa: false } },
+  { n: 5, name: "字幕なし", hint: "字幕を隠して止めずに追いかける", preset: { practice: "flow", showEn: false, showJa: false } },
 ];
 
 const RATES = [0.5, 0.75, 0.9, 1, 1.25, 1.5];
@@ -39,6 +41,8 @@ export function Practice({ id }: { id: string }) {
   const [reveal, setReveal] = useState(false);
   const [ab, setAb] = useState<{ a: number | null }>({ a: null });
   const [tapHint, setTapHint] = useState(false);
+  // the list view follows the playing sentence until the learner scrolls it by hand
+  const [follow, setFollow] = useState(true);
   const holder = useRef<HTMLDivElement>(null);
   const player = useRef<PlayerLike | null>(null);
   const engine = useRef<Engine | null>(null);
@@ -67,9 +71,22 @@ export function Practice({ id }: { id: string }) {
   // rebuild units only when a timing correction changes (not on every play count or rating)
   const adjustKey = JSON.stringify(progress?.adjust ?? {});
   const adjustMap = useMemo(() => JSON.parse(adjustKey) as Progress["adjust"], [adjustKey]);
-  const adjustOf = useCallback((i: number) => (m && adjustMap[m.sentences[i]!.id]) || { s: 0, e: 0 }, [m, adjustMap]);
+  const offset = progress?.offset ?? 0;
+  const flow = settings?.practice === "flow";
+  const exact = useMemo(() => (m ? edgeExactness(m.sentences, m.segments) : []), [m]);
+  const adjustOf = useCallback(
+    (i: number) => {
+      const a = (m && adjustMap[m.sentences[i]!.id]) || { s: 0, e: 0 };
+      // one-sentence practice widens only estimated edges, so a guessed boundary does not clip a word
+      const margin = !flow && settings ? settings.estMargin : 0;
+      return { s: offset + a.s - (exact[i]?.start ? 0 : margin), e: offset + a.e + (exact[i]?.end ? 0 : margin) };
+    },
+    [m, adjustMap, offset, flow, exact, settings?.estMargin],
+  );
 
-  const units = useMemo(() => (m && settings ? buildUnits(m.sentences, settings.unit, settings.multiCount, adjustOf) : []), [m, settings?.unit, settings?.multiCount, adjustOf]);
+  // flow always moves sentence by sentence; the unit choice belongs to one-sentence practice
+  const unitKind = flow ? "sentence" : (settings?.unit ?? "sentence");
+  const units = useMemo(() => (m && settings ? buildUnits(m.sentences, unitKind, settings.multiCount, adjustOf) : []), [m, unitKind, settings?.multiCount, adjustOf]);
 
   const persistProgress = useCallback((patch: Partial<Progress>) => {
     const cur = progressRef.current;
@@ -100,6 +117,7 @@ export function Practice({ id }: { id: string }) {
         player.current = p;
         const eng = new Engine(p, units, settings, { start: m.start, end: m.end }, setEs);
         engine.current = eng;
+        eng.setFlow(settings.practice === "flow");
         eng.setUnits(units, progressRef.current?.sentenceIndex ?? 0);
         setReady(true);
       })
@@ -137,6 +155,9 @@ export function Practice({ id }: { id: string }) {
   useEffect(() => {
     if (engine.current && settings) engine.current.setSettings(settings);
   }, [settings]);
+  useEffect(() => {
+    if (engine.current && engine.current.isFlow() !== flow) engine.current.setFlow(flow);
+  }, [flow]);
 
   // remember where we are
   const curUnit = es ? units[es.unit] : undefined;
@@ -150,10 +171,25 @@ export function Practice({ id }: { id: string }) {
     lastPhase.current = es?.phase ?? "idle";
   }, [es?.phase, persistProgress]);
 
-  // keep the current sentence visible in list view
+  // keep the playing sentence visible in list view, unless the learner is looking elsewhere
+  const scrolling = useRef(false);
   useEffect(() => {
+    if (!follow) return;
+    scrolling.current = true;
     listRef.current?.querySelector(`[data-i="${curSentence}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [curSentence, settings?.view]);
+    const t0 = setTimeout(() => (scrolling.current = false), 700);
+    return () => clearTimeout(t0);
+  }, [curSentence, settings?.view, follow]);
+  useEffect(() => {
+    if (settings?.view !== "list") return;
+    const stop = () => !scrolling.current && setFollow(false);
+    addEventListener("wheel", stop, { passive: true });
+    addEventListener("touchmove", stop, { passive: true });
+    return () => {
+      removeEventListener("wheel", stop);
+      removeEventListener("touchmove", stop);
+    };
+  }, [settings?.view]);
 
   const updateSettings = (patch: Partial<Settings>) => {
     setSettings((s) => {
@@ -182,14 +218,22 @@ export function Practice({ id }: { id: string }) {
       </main>
     );
 
-  const sIdx = Math.min(curSentence, m.sentences.length - 1);
+  // flow highlights the sentence being heard; the display delay compensates late audio (Bluetooth)
+  const heard = flow && es?.phase === "playing" ? units.reduce((k, u, i) => (u.start <= t - settings.displayDelay ? i : k), 0) : -1;
+  const sIdx = Math.min(heard >= 0 ? (units[heard]?.sentence ?? curSentence) : curSentence, m.sentences.length - 1);
   const s = m.sentences[sIdx]!;
   const playing = es?.phase === "playing";
   const gapLeft = es?.phase === "gap" && es.gapUntil ? Math.max(0, es.gapUntil - performance.now()) : 0;
-  const chunkIdx = settings.unit === "chunk" && curUnit ? units.slice(0, es!.unit + 1).filter((u) => u.sentence === sIdx).length - 1 : -1;
+  const chunkIdx = unitKind === "chunk" && curUnit ? units.slice(0, es!.unit + 1).filter((u) => u.sentence === sIdx).length - 1 : -1;
   const step = STEPS.find((x) => x.n === settings.step);
   const rating = progress?.ratings[s.id];
   const adj = progress?.adjust[s.id] ?? { s: 0, e: 0 };
+
+  const playSentence = (i: number) => {
+    const u = units.findIndex((uu) => uu.sentence === i);
+    if (u >= 0) firstPlay(() => engine.current?.playUnit(u));
+    setFollow(true);
+  };
 
   const tapWord = (si: number, wi: number) => {
     engine.current?.pause();
@@ -205,9 +249,17 @@ export function Practice({ id }: { id: string }) {
       <div className={`en ${!settings.showEn && !reveal ? "hidden-text" : ""}`} style={big ? undefined : { fontSize: 17 }}>
         {sen.words.map((w, wi) => {
           if (chunkStarts.has(wi)) ci++;
-          const showSep = settings.unit === "chunk" && wi > 0 && chunkStarts.has(wi);
-          const cls = settings.unit === "chunk" && isCur && chunkIdx >= 0 ? (ci === chunkIdx ? "chunk-on" : "chunk-off") : "";
+          const showSep = unitKind === "chunk" && wi > 0 && chunkStarts.has(wi);
+          const cls = unitKind === "chunk" && isCur && chunkIdx >= 0 ? (ci === chunkIdx ? "chunk-on" : "chunk-off") : "";
           const sel = sheet && sheet.s === si && wi >= sheet.from && wi <= sheet.to;
+          // in the flow view a neighbouring sentence is one big target that jumps there; words open the dictionary only in the current one
+          if (flow && settings.view === "current" && !isCur)
+            return (
+              <span key={wi}>
+                {showSep && <span className="sep">/</span>}
+                {w.w}{" "}
+              </span>
+            );
           return (
             <span key={wi}>
               {showSep && <span className="sep">/</span>}
@@ -249,6 +301,14 @@ export function Practice({ id }: { id: string }) {
       {playerError && <div className="flash error" style={{ marginBottom: 10 }}>{playerError}　字幕と単語テストは引き続き使えます。</div>}
       {tapHint && <div className="flash warn small">スマホでは最初の 1 回だけ、動画の上の再生ボタンを直接タップしてください（ブラウザの自動再生の制限）</div>}
 
+      <div className="seg" role="radiogroup" aria-label="再生のしかた">
+        <button role="radio" aria-checked={flow} className={flow ? "on" : ""} onClick={() => updateSettings({ practice: "flow", step: settings.step === 2 || settings.step === 3 ? 4 : settings.step })}>
+          流れモード<small>止めずに進む</small>
+        </button>
+        <button role="radio" aria-checked={!flow} className={!flow ? "on" : ""} onClick={() => updateSettings({ practice: "single", step: settings.step === 2 || settings.step === 3 ? settings.step : 3 })}>
+          一文練習<small>止めて反復</small>
+        </button>
+      </div>
       <div className="steps" role="tablist" aria-label="練習の流れ">
         {STEPS.map((x) => (
           <button key={x.n} role="tab" aria-selected={settings.step === x.n} className={`step ${settings.step === x.n ? "on" : ""}`} onClick={() => updateSettings({ ...x.preset, step: x.n })}>
@@ -257,7 +317,7 @@ export function Practice({ id }: { id: string }) {
           </button>
         ))}
       </div>
-      {step && <p className="small muted one-line" style={{ margin: "0 4px 8px" }}>{step.hint}</p>}
+      {step && !flow && <p className="small muted one-line" style={{ margin: "0 4px 8px" }}>{step.hint}</p>}
 
 
       {m.sample && (
@@ -268,8 +328,40 @@ export function Practice({ id }: { id: string }) {
         </div>
       )}
 
-      {settings.view === "current" ? (
-        <motion.div key={s.id} className="sentence-card" initial={{ opacity: 0.4, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }} onClick={() => !settings.showEn && setReveal((r) => !r)}>
+      {settings.view === "current" && flow ? (
+        <div className="flow-view" aria-live="off">
+          {[sIdx - 1, sIdx, sIdx + 1].map((i) => {
+            const x = m.sentences[i];
+            if (!x) return <div key={`blank${i}`} className="flow-s blank" />;
+            const cur = i === sIdx;
+            return (
+              <div
+                key={x.id}
+                data-i={i}
+                className={`flow-s ${cur ? "cur now" : i < sIdx ? "before" : "after"} ${x.edge ? "edge" : ""}`}
+                role="button"
+                tabIndex={0}
+                aria-label={`${i + 1} 文目から再生`}
+                onClick={() => (cur && !settings.showEn ? setReveal((r) => !r) : playSentence(i))}
+                onKeyDown={(e) => e.key === "Enter" && playSentence(i)}
+              >
+                {cur && (
+                  <div className="row between small muted" style={{ marginBottom: 4 }}>
+                    <span>
+                      {i + 1} / {m.sentences.length}　{formatTime(x.start, true)}
+                    </span>
+                    {x.timing === "estimated" && <span className="badge warn" title="字幕の行の途中で区切ったため、時刻は文字数から推定しています">時刻は推定</span>}
+                  </div>
+                )}
+                {renderEn(i, cur)}
+                {settings.showJa && x.ja && cur && <div className="ja">{x.ja}</div>}
+              </div>
+            );
+          })}
+          {!settings.showEn && <div className="small muted" style={{ margin: "0 4px" }}>{reveal ? "今の文をタップで隠す" : "字幕を隠しています（今の文をタップで表示）"}</div>}
+        </div>
+      ) : settings.view === "current" ? (
+        <motion.div key={s.id} className="sentence-card now" initial={{ opacity: 0.4, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }} onClick={() => !settings.showEn && setReveal((r) => !r)}>
           <div className="row between small muted" style={{ marginBottom: 6 }}>
             <span>
               {sIdx + 1} / {m.sentences.length}　{formatTime(s.start, true)}
@@ -298,10 +390,7 @@ export function Practice({ id }: { id: string }) {
               key={x.id}
               data-i={i}
               className={`s ${i === sIdx ? "cur" : ""} ${x.edge ? "edge" : ""}`}
-              onClick={() => {
-                const u = units.findIndex((uu) => uu.sentence === i);
-                if (u >= 0) firstPlay(() => engine.current?.playUnit(u));
-              }}
+              onClick={() => playSentence(i)}
             >
               <div className="small muted">
                 {formatTime(x.start)} {progress?.ratings[x.id] ? `・${RATING_LABEL[progress.ratings[x.id]!]}` : ""}
@@ -312,10 +401,15 @@ export function Practice({ id }: { id: string }) {
           ))}
         </div>
       )}
+      {settings.view === "list" && !follow && (
+        <button className="btn sm follow-btn" onClick={() => setFollow(true)}>
+          ↓ 再生中の文へ戻る
+        </button>
+      )}
 
       <div className="row wrap" style={{ margin: "12px 0", gap: 6 }}>
-        <button className={`chip ${settings.view === "list" ? "on" : ""}`} onClick={() => updateSettings({ view: settings.view === "list" ? "current" : "list" })}>
-          前後の字幕
+        <button className={`chip ${settings.view === "list" ? "on" : ""}`} onClick={() => (updateSettings({ view: settings.view === "list" ? "current" : "list" }), setFollow(true))}>
+          全文の一覧
         </button>
         <button className={`chip ${settings.showEn ? "on" : ""}`} aria-pressed={settings.showEn} onClick={() => updateSettings({ showEn: !settings.showEn })}>
           英語字幕
@@ -344,10 +438,25 @@ export function Practice({ id }: { id: string }) {
       <AnimatePresence>
         {panel === "timing" && (
           <motion.section className="glass card" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
-            <h2>この文の時刻を補正</h2>
+            <h2>時刻の補正</h2>
             <p className="small muted" style={{ marginTop: -4 }}>
-              語頭が切れる・前の文が混ざるときに 0.1 秒ずつ調整できます（保存されます）。
+              補正はこの教材に保存され、AI や字幕の取り直しは行いません。
             </p>
+            <div className="row" style={{ marginBottom: 10 }}>
+              <span className="grow small">
+                教材全体をずらす {offset ? `（${offset > 0 ? "+" : ""}${(offset / 1000).toFixed(1)} 秒）` : "（0）"}
+                <br />
+                <span className="muted">どの文も同じだけずれるとき</span>
+              </span>
+              {[-100, 100].map((d) => (
+                <button key={d} className="btn sm" aria-label={`教材全体を${d < 0 ? "0.1 秒早く" : "0.1 秒遅く"}`} onClick={() => persistProgress({ offset: offset + d })}>
+                  {d < 0 ? "−0.1" : "+0.1"}
+                </button>
+              ))}
+            </div>
+            <div className="small" style={{ fontWeight: 700, margin: "4px 0 6px" }}>
+              この文（{sIdx + 1} 文目）{s.timing === "estimated" ? "・時刻は推定" : ""}
+            </div>
             {(["s", "e"] as const).map((k) => (
               <div key={k} className="row" style={{ marginBottom: 8 }}>
                 <span className="grow small">
@@ -361,6 +470,14 @@ export function Practice({ id }: { id: string }) {
                 ))}
               </div>
             ))}
+            <div className="row wrap" style={{ marginBottom: 8 }}>
+              <button className="btn sm" onClick={() => persistProgress({ adjust: { ...progress!.adjust, [s.id]: { ...adj, s: Math.round(t - s.start - offset) } } })}>
+                今の位置（{formatTime(t, true)}）を開始に
+              </button>
+              <button className="btn sm" onClick={() => persistProgress({ adjust: { ...progress!.adjust, [s.id]: { ...adj, e: Math.round(t - s.end - offset) } } })}>
+                今の位置を終了に
+              </button>
+            </div>
             <div className="row">
               <button className="btn sm" onClick={() => engine.current?.playUnit(units.findIndex((u) => u.sentence === sIdx))}>
                 ▶ 確かめる
@@ -377,7 +494,12 @@ export function Practice({ id }: { id: string }) {
         <>
       <div className="controls glass">
         <div className="chips" style={{ justifyContent: "center", marginBottom: 8 }}>
-          {(["chunk", "sentence", "multi"] as const).map((u) => (
+          {flow && (
+            <button className="chip" onClick={() => firstPlay(() => engine.current?.toStart())} disabled={!ready}>
+              ⇤ 区間の先頭へ
+            </button>
+          )}
+          {!flow && (["chunk", "sentence", "multi"] as const).map((u) => (
             <button key={u} className={`chip ${settings.unit === u ? "on" : ""}`} onClick={() => updateSettings({ unit: u })}>
               {u === "chunk" ? "まとまり" : u === "sentence" ? "一文" : `${settings.multiCount}文`}
             </button>
@@ -385,24 +507,26 @@ export function Practice({ id }: { id: string }) {
           <button className="chip" onClick={() => updateSettings({ rate: RATES[(RATES.indexOf(settings.rate) + 1) % RATES.length]! })} aria-label="再生速度">
             {settings.rate}x
           </button>
-          <button className="chip" onClick={() => updateSettings({ repeats: settings.repeats >= 5 ? (settings.repeats === 0 ? 1 : 0) : settings.repeats + 1 })} aria-label="反復回数">
-            ×{settings.repeats === 0 ? "∞" : settings.repeats}
-          </button>
+          {!flow && (
+            <button className="chip" onClick={() => updateSettings({ repeats: settings.repeats >= 5 ? (settings.repeats === 0 ? 1 : 0) : settings.repeats + 1 })} aria-label="反復回数">
+              ×{settings.repeats === 0 ? "∞" : settings.repeats}
+            </button>
+          )}
           <button className="chip" onClick={() => setPanel(panel === "settings" ? "none" : "settings")} aria-label="詳しい設定">
             ⚙
           </button>
         </div>
         <div className="main">
-          <button className="icon-btn" aria-label="前へ" onClick={() => engine.current?.prev()} disabled={!ready}>
+          <button className="icon-btn" aria-label="前の文へ" onClick={() => firstPlay(() => engine.current?.prev())} disabled={!ready}>
             ⏮
           </button>
-          <button className="icon-btn" aria-label="同じところをもう一度" onClick={() => firstPlay(() => engine.current?.restart())} disabled={!ready}>
+          <button className="icon-btn" aria-label="今の文の先頭へ" onClick={() => firstPlay(() => engine.current?.restart())} disabled={!ready}>
             ↺
           </button>
           <button className="icon-btn big" aria-label={playing ? "停止" : "再生"} onClick={() => firstPlay(() => (es?.phase === "gap" ? engine.current?.pause() : engine.current?.toggle()))} disabled={!ready}>
             {playing || es?.phase === "gap" ? "⏸" : "▶"}
           </button>
-          <button className="icon-btn" aria-label="次へ" onClick={() => engine.current?.next()} disabled={!ready}>
+          <button className="icon-btn" aria-label="次の文へ" onClick={() => firstPlay(() => engine.current?.next())} disabled={!ready}>
             ⏭
           </button>
           <button
@@ -425,6 +549,7 @@ export function Practice({ id }: { id: string }) {
             {es?.ab ? "AB✓" : ab.a != null ? "B?" : "AB"}
           </button>
         </div>
+        {es?.ab && <div className="small muted" style={{ textAlign: "center", marginTop: 4 }}>A–B ループ中（AB✓ で解除すると、そこから{flow ? "流れて進みます" : "元の練習に戻ります"}）</div>}
         {es?.phase === "gap" && (
           <div className="row" style={{ marginTop: 6 }}>
             <div className="gapbar grow" aria-label="待ち時間">
@@ -436,7 +561,7 @@ export function Practice({ id }: { id: string }) {
             </button>
           </div>
         )}
-        {settings.repeats > 1 && es && es.phase !== "idle" && (
+        {!flow && settings.repeats > 1 && es && es.phase !== "idle" && (
           <div className="progress-dots" aria-label={`${es.rep + 1} 回目`}>
             {Array.from({ length: settings.repeats }, (_, i) => (
               <i key={i} className={i <= es.rep ? "on" : ""} />
@@ -451,7 +576,7 @@ export function Practice({ id }: { id: string }) {
             <motion.div className="backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setPanel("none")} />
             <motion.div className="sheet" role="dialog" aria-label="練習の設定" initial={{ y: "100%", x: "-50%" }} animate={{ y: 0, x: "-50%" }} exit={{ y: "100%", x: "-50%" }} transition={{ type: "spring", damping: 30, stiffness: 320 }}>
               <div className="grab" />
-              <PracticeSettings settings={settings} update={updateSettings} />
+              <PracticeSettings settings={settings} update={updateSettings} flow={flow} />
               <div className="stack" style={{ marginTop: 14 }}>
                 <button className="btn" style={{ width: "100%" }} onClick={() => (setPanel("none"), firstPlay(() => engine.current?.playRange(0)))}>
                   ▶ 取り込んだ区間を最初から通して再生
@@ -494,7 +619,7 @@ export function Practice({ id }: { id: string }) {
   );
 }
 
-function PracticeSettings({ settings, update }: { settings: Settings; update: (p: Partial<Settings>) => void }) {
+function PracticeSettings({ settings, update, flow }: { settings: Settings; update: (p: Partial<Settings>) => void; flow: boolean }) {
   const Seg = <T extends string | number | boolean>({ label, value, options, onChange }: { label: string; value: T; options: [T, string][]; onChange: (v: T) => void }) => (
     <div style={{ marginBottom: 12 }}>
       <div className="label">{label}</div>
@@ -513,15 +638,26 @@ function PracticeSettings({ settings, update }: { settings: Settings; update: (p
       <p className="small muted" style={{ marginTop: -4 }}>
         初期値は開発者の提案です（最適値の保証ではありません）。変更は自動で保存されます。
       </p>
-      <Seg label="練習のしかた" value={settings.mode} options={[["listen", "聞く"], ["repeat", "止めてまねる（リピーティング）"], ["shadow", "止めずに追いかける（シャドーイング）"]]} onChange={(mode) => update({ mode })} />
-      <Seg label="区切り" value={settings.unit} options={[["chunk", "意味のまとまり"], ["sentence", "一文"], ["multi", "複数の文"]]} onChange={(unit) => update({ unit })} />
-      {settings.unit === "multi" && <Seg label="何文ずつ" value={settings.multiCount} options={[[2, "2"], [3, "3"], [4, "4"], [5, "5"]]} onChange={(multiCount) => update({ multiCount })} />}
-      <Seg label="反復回数" value={settings.repeats} options={[[1, "1"], [2, "2"], [3, "3"], [5, "5"], [10, "10"], [0, "∞"]]} onChange={(repeats) => update({ repeats })} />
-      <Seg label="反復の間の待ち時間（リピーティング）" value={settings.gapMode} options={[["none", "なし"], ["fixed", "秒数で"], ["ratio", "聞いた長さに合わせる"]]} onChange={(gapMode) => update({ gapMode })} />
-      {settings.gapMode === "fixed" && <Seg label="待つ秒数" value={settings.gapFixed} options={[[1, "1"], [2, "2"], [3, "3"], [5, "5"], [10, "10"]]} onChange={(gapFixed) => update({ gapFixed })} />}
-      {settings.gapMode === "ratio" && <Seg label="聞いた長さの何倍待つか" value={settings.gapRatio} options={[[0.5, "0.5"], [1, "1"], [1.5, "1.5"], [2, "2"]]} onChange={(gapRatio) => update({ gapRatio })} />}
+      <Seg label="再生のしかた" value={settings.practice} options={[["flow", "流れモード（止めずに進む）"], ["single", "一文練習（止めて反復）"]]} onChange={(practice) => update({ practice })} />
+      {flow ? (
+        <p className="small muted" style={{ margin: "-4px 0 12px" }}>
+          流れモードでは文末で止まらず、反復・待ち時間も使いません。一文練習に戻すと、下の一文練習の設定がそのまま使われます。
+        </p>
+      ) : (
+        <>
+          <Seg label="一文練習のしかた" value={settings.mode} options={[["listen", "聞く"], ["repeat", "止めてまねる（リピーティング）"], ["shadow", "一文を続けて追いかける"]]} onChange={(mode) => update({ mode })} />
+          <Seg label="区切り" value={settings.unit} options={[["chunk", "意味のまとまり"], ["sentence", "一文"], ["multi", "複数の文"]]} onChange={(unit) => update({ unit })} />
+          {settings.unit === "multi" && <Seg label="何文ずつ" value={settings.multiCount} options={[[2, "2"], [3, "3"], [4, "4"], [5, "5"]]} onChange={(multiCount) => update({ multiCount })} />}
+          <Seg label="反復回数" value={settings.repeats} options={[[1, "1"], [2, "2"], [3, "3"], [5, "5"], [10, "10"], [0, "∞"]]} onChange={(repeats) => update({ repeats })} />
+          <Seg label="反復の間の待ち時間（リピーティング）" value={settings.gapMode} options={[["none", "なし"], ["fixed", "秒数で"], ["ratio", "聞いた長さに合わせる"]]} onChange={(gapMode) => update({ gapMode })} />
+          {settings.gapMode === "fixed" && <Seg label="待つ秒数" value={settings.gapFixed} options={[[1, "1"], [2, "2"], [3, "3"], [5, "5"], [10, "10"]]} onChange={(gapFixed) => update({ gapFixed })} />}
+          {settings.gapMode === "ratio" && <Seg label="聞いた長さの何倍待つか" value={settings.gapRatio} options={[[0.5, "0.5"], [1, "1"], [1.5, "1.5"], [2, "2"]]} onChange={(gapRatio) => update({ gapRatio })} />}
+          <Seg label="「聞く」で文末に止める" value={settings.autoStop} options={[[true, "止める"], [false, "続けて再生"]]} onChange={(autoStop) => update({ autoStop })} />
+          <Seg label="時刻が推定の文の端に足す余白" value={settings.estMargin} options={[[0, "なし"], [200, "0.2 秒"], [400, "0.4 秒"]]} onChange={(estMargin) => update({ estMargin })} />
+        </>
+      )}
       <Seg label="再生速度" value={settings.rate} options={RATES.map((r) => [r, `${r}x`] as [number, string])} onChange={(rate) => update({ rate })} />
-      <Seg label="「聞く」で文末に止める" value={settings.autoStop} options={[[true, "止める"], [false, "続けて再生"]]} onChange={(autoStop) => update({ autoStop })} />
+      <Seg label="字幕の表示を遅らせる（Bluetooth イヤホンで音が遅れて聞こえるとき）" value={settings.displayDelay} options={[[0, "なし"], [150, "0.15 秒"], [250, "0.25 秒"], [400, "0.4 秒"]]} onChange={(displayDelay) => update({ displayDelay })} />
       <Seg label="前後の余白（語頭・語尾が切れるとき）" value={`${settings.padPre}/${settings.padPost}`} options={[["0/0", "なし"], ["150/250", "標準"], ["300/500", "多め"]]} onChange={(v) => {
         const [a, b] = v.split("/").map(Number);
         update({ padPre: a!, padPost: b! });

@@ -7,10 +7,29 @@ const TS = /(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})/;
 const toMs = (m: RegExpMatchArray) =>
   ((Number(m[1] ?? 0) * 60 + Number(m[2])) * 60 + Number(m[3])) * 1000 + Number(m[4]!.padEnd(3, "0"));
 
+const INLINE_TS = /<((?:\d+:)?\d{1,2}:\d{2}[.,]\d{1,3})>/;
+
+/**
+ * A VTT line with per-word time tags ("how<00:00:01.500><c> are</c>", as in YouTube auto captions)
+ * becomes one segment per timed piece, so the real word times are kept instead of estimated.
+ */
+function timedPieces(line: string, cueStart: number, cueEnd: number): Segment[] {
+  const parts = line.split(INLINE_TS);
+  const pieces: { start: number; text: string }[] = [];
+  pieces.push({ start: cueStart, text: parts[0]! });
+  for (let k = 1; k < parts.length; k += 2) pieces.push({ start: toMs(parts[k]!.match(TS)!), text: parts[k + 1] ?? "" });
+  const clean = pieces.map((p) => ({ ...p, text: cleanCaption(p.text) })).filter((p) => p.text);
+  return clean.map((p, i) => {
+    const end = clean[i + 1]?.start ?? cueEnd;
+    return { text: p.text, start: p.start, dur: Math.max(1, end - p.start) };
+  });
+}
+
 /** Parses SRT or WebVTT text into segments (cue settings, styling and NOTE blocks ignored). */
 export function parseSubtitles(text: string): Segment[] {
   const blocks = text.replace(/^﻿/, "").replace(/\r\n?/g, "\n").split(/\n{2,}/);
   const out: Segment[] = [];
+  const wordTimed = INLINE_TS.test(text);
   for (const block of blocks) {
     const lines = block.split("\n").filter((l) => l.trim());
     const ti = lines.findIndex((l) => l.includes("-->"));
@@ -21,8 +40,14 @@ export function parseSubtitles(text: string): Segment[] {
     if (!ma || !mb) continue;
     const start = toMs(ma);
     const end = toMs(mb);
+    if (end <= start) continue;
+    if (wordTimed) {
+      // YouTube repeats the previous line above the new one; only lines with time tags are new speech
+      for (const l of lines.slice(ti + 1).filter((l) => INLINE_TS.test(l))) out.push(...timedPieces(l, start, end));
+      continue;
+    }
     const body = cleanCaption(lines.slice(ti + 1).join(" "));
-    if (!body || end <= start) continue;
+    if (!body) continue;
     out.push({ text: body, start, dur: end - start });
   }
   return out.sort((x, y) => x.start - y.start);

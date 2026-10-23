@@ -12,6 +12,8 @@ export interface Progress {
   ratings: Record<string, Rating>;
   /** manual timing correction per sentence, ms */
   adjust: Record<string, { s: number; e: number }>;
+  /** shift applied to every sentence of this material (same delay everywhere), ms */
+  offset?: number;
   plays: number;
   lastAt: number;
   updatedAt: number;
@@ -66,6 +68,12 @@ export interface ImportJob {
 }
 
 export interface Settings {
+  /** flow: play straight through, highlight follows. single: one unit at a time with stops/repeats */
+  practice: "flow" | "single";
+  /** show the highlight this much later (Bluetooth earphones play the audio late), ms */
+  displayDelay: number;
+  /** extra margin on sentence edges whose time is estimated inside a caption line (one-sentence practice), ms */
+  estMargin: number;
   unit: "chunk" | "sentence" | "multi";
   multiCount: number;
   mode: "listen" | "repeat" | "shadow";
@@ -89,6 +97,9 @@ export interface Settings {
  * estimated sentence times do not clip the first or last syllable.
  */
 export const DEFAULT_SETTINGS: Settings = {
+  practice: "flow",
+  displayDelay: 0,
+  estMargin: 200,
   unit: "sentence",
   multiCount: 2,
   mode: "repeat",
@@ -103,7 +114,7 @@ export const DEFAULT_SETTINGS: Settings = {
   view: "current",
   padPre: 150,
   padPost: 250,
-  step: 3,
+  step: 4,
 };
 
 interface Schema extends DBSchema {
