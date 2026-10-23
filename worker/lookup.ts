@@ -14,6 +14,29 @@ const POS = ["名詞", "動詞", "形容詞", "副詞", "句動詞", "熟語", "
 const str = (v: unknown, max: number) => String(v ?? "").trim().slice(0, max);
 const list = (v: unknown) => (Array.isArray(v) ? v.map((x) => str(x, 80)).filter(Boolean).slice(0, 8) : []);
 
+const low = (x: string) => x.toLowerCase().trim();
+
+function distance(a: string, b: string) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0]![j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++) d[i]![j] = Math.min(d[i - 1]![j]! + 1, d[i]![j - 1]! + 1, d[i - 1]![j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length]![b.length]!;
+}
+
+/**
+ * Another accepted answer for a blank must fit the same slot: same number of words, a near spelling
+ * (realised / realized), and not just the base form when the blank holds an inflected form.
+ */
+export function spellingVariant(form: string, surface: string, lemma: string) {
+  const f = low(form);
+  const s = low(surface);
+  if (f === s) return true;
+  if (f.split(/\s+/).length !== s.split(/\s+/).length) return false;
+  if (f === low(lemma)) return false;
+  return distance(f, s) <= 2;
+}
+
 /** Checks and repairs a model answer; null when it cannot be used. */
 export function validateEntry(raw: Record<string, unknown> | null, term: string): DictEntry | null {
   if (!raw) return null;
@@ -32,9 +55,9 @@ export function validateEntry(raw: Record<string, unknown> | null, term: string)
   }
   if (!clozeFromText(example, exampleSurface)) exampleSurface = "";
   const pos = POS.includes(str(raw.pos, 10)) ? str(raw.pos, 10) : "その他";
-  const accepted = [...new Set([term, ...list(raw.accepted)])];
-  const exampleAccepted = exampleSurface ? [...new Set([exampleSurface, ...list(raw.exampleAccepted)])] : [];
-  return { term, lemma, pos, meaning, note: str(raw.note, 200), example, exampleJa: str(raw.exampleJa, 240), accepted, exampleAccepted, exampleSurface };
+  const accepted = [term, ...list(raw.accepted).filter((f) => spellingVariant(f, term, lemma))];
+  const exampleAccepted = exampleSurface ? [exampleSurface, ...list(raw.exampleAccepted).filter((f) => spellingVariant(f, exampleSurface, lemma))] : [];
+  return { term, lemma, pos, meaning, note: str(raw.note, 200), example, exampleJa: str(raw.exampleJa, 240), accepted: [...new Set(accepted)], exampleAccepted: [...new Set(exampleAccepted)], exampleSurface };
 }
 
 export const lookup = new Hono<AppEnv>();

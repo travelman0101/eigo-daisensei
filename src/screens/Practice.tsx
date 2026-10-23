@@ -7,6 +7,7 @@ import { useApp } from "../App";
 import { DictSheet } from "../components/DictSheet";
 import { Recorder } from "../components/Recorder";
 import { db, getKv, getSettings, guard, setKv, type Progress, type Rating, type Settings } from "../lib/db";
+import { openSample, refreshSample } from "../lib/samples";
 import { markDirty } from "../lib/sync";
 import { Engine, buildUnits, type EngineState } from "../player/engine";
 import { createYouTube, type PlayerLike } from "../player/yt";
@@ -48,6 +49,8 @@ export function Practice({ id }: { id: string }) {
   // load material, progress and settings from the device (no network, no AI)
   useEffect(() => {
     (async () => {
+      // a built-in sample opened by link for the first time on this device is copied in from the app
+      if (id.startsWith("sample_") && !(await db().get("materials", id))) await openSample(id.slice(7)).catch(() => {});
       const mat = await db().get("materials", id);
       if (!mat) return setM(null);
       const p: Progress = (await db().get("progress", id)) ?? { materialId: id, sentenceIndex: 0, ratings: {}, adjust: {}, plays: 0, lastAt: Date.now(), updatedAt: Date.now() };
@@ -55,6 +58,7 @@ export function Practice({ id }: { id: string }) {
       setProgress(p);
       setSettings(await getSettings());
       setM(mat);
+      if (mat.sample && navigator.onLine) void refreshSample(id.slice(7)).then((fresh) => fresh && setM(fresh));
       setTip(!(await getKv("seenPracticeTip", false)));
       await setKv("lastMaterial", id);
     })();
@@ -111,9 +115,13 @@ export function Practice({ id }: { id: string }) {
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
+    // animation frames stop while the page is not drawn (another tab or window in front),
+    // so a timer keeps sentence-end stops working; browsers still run it at least once a second
+    const iv = setInterval(() => engine.current?.tick(), 100);
     return () => {
       alive = false;
       cancelAnimationFrame(raf);
+      clearInterval(iv);
       engine.current?.destroy();
       player.current?.destroy();
       engine.current = null;
@@ -255,6 +263,8 @@ export function Practice({ id }: { id: string }) {
       {m.sample && (
         <div className="small muted" style={{ margin: "0 4px 10px" }}>
           <span className="badge">{m.sample.level} の目安</span> {m.sample.reason}
+          <br />
+          出典: <a href={m.sample.sourceUrl} target="_blank" rel="noreferrer">{m.sample.credit}</a>（{m.sample.license}）。レベルは目安で、公式の判定ではありません。
         </div>
       )}
 

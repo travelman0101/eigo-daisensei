@@ -2,6 +2,9 @@ import { normWord } from "./text";
 import type { SentenceSpan, Word } from "./types";
 
 const TERMINAL = /[.?!]["'”’)\]]*$/;
+/** "Dr." "Mr." "U.S." "J." end with a period but do not end a sentence */
+const ABBREVIATION = /^(mr|mrs|ms|dr|prof|st|sr|jr|vs|etc|e\.g|i\.e|u\.s|u\.k|mt|ft|gen|gov|sen|rep|[a-z])\.$/i;
+export const endsSentence = (token: string) => TERMINAL.test(token) && !ABBREVIATION.test(token.replace(/^["'(]+/, ""));
 export const MAX_SENTENCE_WORDS = 30;
 const FALLBACK_GAP = 700;
 const FALLBACK_WORDS = 20;
@@ -36,7 +39,7 @@ export function alignPunctuated(words: string[], punctuated: string): Marks | nu
     }
     if (j >= tokens.length || normWord(tokens[j]!) !== cw) return null;
     display.push(tokens[j]!);
-    ends.push(TERMINAL.test(tokens[j]!));
+    ends.push(endsSentence(tokens[j]!));
     j++;
   }
   for (; j < tokens.length; j++) {
@@ -48,7 +51,7 @@ export function alignPunctuated(words: string[], punctuated: string): Marks | nu
 
 /** Sentence ends taken from the captions' own punctuation (manual captions). */
 export function marksFromCaptions(words: Word[]): Marks {
-  return { display: words.map((w) => w.w), ends: words.map((w) => TERMINAL.test(w.w)) };
+  return { display: words.map((w) => w.w), ends: words.map((w) => endsSentence(w.w)) };
 }
 
 /** Mechanical split when the AI result cannot be used: pauses ≥ 0.7 s, punctuation, or 20 words. */
@@ -58,7 +61,7 @@ export function fallbackMarks(words: Word[]): Marks {
   words.forEach((w, i) => {
     count++;
     const next = words[i + 1];
-    const end = TERMINAL.test(w.w) || (next ? next.start - w.end >= FALLBACK_GAP : false) || count >= FALLBACK_WORDS;
+    const end = endsSentence(w.w) || (next ? next.start - w.end >= FALLBACK_GAP : false) || count >= FALLBACK_WORDS;
     ends.push(end);
     if (end) count = 0;
   });

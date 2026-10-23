@@ -38,3 +38,19 @@ export async function openSample(id: string): Promise<string> {
 }
 
 export const thumb = (videoId: string) => `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
+
+/** Replaces an already copied sample when the app ships a corrected version (progress is stored separately). */
+export async function refreshSample(id: string): Promise<Material | null> {
+  const mid = sampleMaterialId(id);
+  const local = await db().get("materials", mid);
+  try {
+    const r = await fetch(`/samples/${encodeURIComponent(id)}.json`, { cache: "no-cache" });
+    if (!r.ok) return null;
+    const m = { ...((await r.json()) as Material), id: mid };
+    if (local && JSON.stringify(local.sentences) === JSON.stringify(m.sentences)) return null;
+    await guard(db().put("materials", m));
+    return m;
+  } catch {
+    return null;
+  }
+}

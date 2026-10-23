@@ -2,7 +2,7 @@ import { sha256Hex } from "../shared/material";
 import type { Env } from "./env";
 
 /** Bump when a prompt changes in a way that should not reuse old cached results. */
-export const PROMPT_VERSION = { punct: 1, translate: 1, lookup: 1 } as const;
+export const PROMPT_VERSION = { punct: 1, translate: 1, lookup: 2 } as const;
 
 export interface AiResult {
   text: string;

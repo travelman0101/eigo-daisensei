@@ -124,6 +124,10 @@ describe("sentences", () => {
     const w = wordsFromSegments([seg(0, 1000, "one two"), seg(3000, 1000, "three four")]);
     expect(fallbackMarks(w).ends).toEqual([false, true, false, false]); // the last one stays open for the next block
   });
+  it("does not end a sentence at abbreviations", () => {
+    const w = wordsFromSegments([seg(0, 3000, "Hi, Dr. Jill. Mr. Smith lives in the U.S. now.")]);
+    expect(spansFromMarks(marksFromCaptions(w), 0).map((x) => x.text)).toEqual(["Hi, Dr. Jill.", "Mr. Smith lives in the U.S. now."]);
+  });
   it("uses caption punctuation", () => {
     const w = wordsFromSegments([seg(0, 1000, "Hi there. Bye")]);
     expect(spansFromMarks(marksFromCaptions(w), 0)).toEqual([

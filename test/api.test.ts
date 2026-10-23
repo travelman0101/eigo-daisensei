@@ -185,6 +185,13 @@ describe("lookup", () => {
     const r = await post("/api/lookup", { term: "gave up", sentence: "She gave up smoking." }, undefined, f.env);
     expect((await r.json<{ entry: { exampleSurface: string } }>()).entry.exampleSurface).toBe("give up");
   });
+  it("accepts only forms that fit the blank", async () => {
+    const { spellingVariant } = await import("../worker/lookup");
+    expect(spellingVariant("realised", "realized", "realize")).toBe(true);
+    expect(spellingVariant("flight", "flights", "flight")).toBe(false);
+    expect(spellingVariant("staging ground", "staging", "stage")).toBe(false);
+    expect(spellingVariant("gave", "gave up", "give up")).toBe(false);
+  });
   it("rejects long selections", async () => {
     expect((await post("/api/lookup", { term: "a b c d e f g", sentence: "x" })).status).toBe(400);
   });

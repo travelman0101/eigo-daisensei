@@ -320,6 +320,22 @@ test.describe("見本・ホーム", () => {
     for (const l of ["A1", "A2", "B1", "B2", "C1"]) await expect(page.getByRole("tab", { name: l })).toBeVisible();
   });
 
+  test("見本はログインなしで各レベル 3 本あり、出典つきで練習できる", async ({ page }) => {
+    await page.goto("/");
+    for (const l of ["A1", "A2", "B1", "B2", "C1"]) {
+      await page.getByRole("tab", { name: l }).click();
+      await expect(page.locator("section").filter({ hasText: "レベル別の見本" }).locator("button.item")).toHaveCount(3);
+    }
+    await page.getByRole("tab", { name: "B1" }).click();
+    await page.locator("section").filter({ hasText: "レベル別の見本" }).locator("button.item").first().click();
+    await expect(page.locator(".sentence-card")).toBeVisible();
+    await expect(page.getByText("B1 の目安")).toBeVisible();
+    await expect(page.getByText(/出典:/)).toBeVisible();
+    // a sample link works on a device that never opened it
+    await page.goto("/m/sample_c1-nasa-landers");
+    await expect(page.locator(".sentence-card")).toContainText("1 /");
+  });
+
   test("デスクトップ幅の表示 @desktop", async ({ page }) => {
     await login(page);
     await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
