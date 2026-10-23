@@ -152,3 +152,33 @@ for (const [name, fn] of Object.entries(variants)) {
   });
   console.log(`${name}: 開始 ${fmt(st)} ／ 終了 ${fmt(en)}`);
 }
+
+// ---- one-sentence playback: how often the first / last word is clipped, with the app's margins ----
+import("../shared/material").then(({ edgeExactness }) => {
+  const ex = edgeExactness(m.sentences, segs);
+  const rows: { start: number; end: number; s0: number; s1: number; exS: boolean; exE: boolean }[] = [];
+  let c = 0;
+  for (const [k, s] of m.sentences.entries()) {
+    const first = normWord(s.words[0]!.w);
+    while (c < cap.length && !(normWord(cap[c]!.w) === first && Math.abs(cap[c]!.start - s.start) < 1500)) c++;
+    if (c >= cap.length) break;
+    const last = c + s.words.length - 1;
+    const r0 = at.get(c);
+    const r1 = at.get(last);
+    if (r0 && r1) rows.push({ start: s.start, end: s.end, s0: r0.start - offset, s1: r1.end - offset, exS: ex[k]!.start, exE: ex[k]!.end });
+    c = last + 1;
+  }
+  for (const [name, margin] of [["余白 標準（前0.15/後0.25秒）・推定の端に追加なし（改善前）", 0], ["＋推定の端だけ 0.2 秒（改善後の初期値）", 200], ["＋推定の端だけ 0.4 秒", 400]] as const) {
+    let cutS = 0;
+    let cutE = 0;
+    const spill: number[] = [];
+    for (const r of rows) {
+      const a = r.start - 150 - (r.exS ? 0 : margin);
+      const b = r.end + 250 + (r.exE ? 0 : margin);
+      if (a > r.s0 + 50) cutS++;
+      if (b < r.s1 - 50) cutE++;
+      spill.push(Math.max(0, b - r.s1));
+    }
+    console.log(`${name}: 語頭が切れる ${cutS}/${rows.length}・語尾が切れる ${cutE}/${rows.length}・語尾のあとの余分 中央値 ${Math.round(median(spill))}ms`);
+  }
+});

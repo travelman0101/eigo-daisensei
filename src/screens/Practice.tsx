@@ -135,7 +135,14 @@ export function Practice({ id }: { id: string }) {
     raf = requestAnimationFrame(loop);
     // animation frames stop while the page is not drawn (another tab or window in front),
     // so a timer keeps sentence-end stops working; browsers still run it at least once a second
-    const iv = setInterval(() => engine.current?.tick(), 100);
+    const iv = setInterval(() => {
+      engine.current?.tick();
+      // the highlight follows the time even when animation frames are throttled
+      if (player.current && performance.now() - last > 90) {
+        last = performance.now();
+        setT(player.current.time());
+      }
+    }, 100);
     return () => {
       alive = false;
       cancelAnimationFrame(raf);
@@ -233,6 +240,13 @@ export function Practice({ id }: { id: string }) {
     const u = units.findIndex((uu) => uu.sentence === i);
     if (u >= 0) firstPlay(() => engine.current?.playUnit(u));
     setFollow(true);
+  };
+
+  // in flow, "previous / this / next" mean relative to the sentence on screen (what the learner sees)
+  const moveBy = (d: -1 | 0 | 1) => {
+    if (!flow) return firstPlay(() => (d < 0 ? engine.current?.prev() : d > 0 ? engine.current?.next() : engine.current?.restart()));
+    const target = Math.max(0, Math.min(m.sentences.length - 1, sIdx + d));
+    playSentence(target);
   };
 
   const tapWord = (si: number, wi: number) => {
@@ -517,16 +531,16 @@ export function Practice({ id }: { id: string }) {
           </button>
         </div>
         <div className="main">
-          <button className="icon-btn" aria-label="前の文へ" onClick={() => firstPlay(() => engine.current?.prev())} disabled={!ready}>
+          <button className="icon-btn" aria-label="前の文へ" onClick={() => moveBy(-1)} disabled={!ready}>
             ⏮
           </button>
-          <button className="icon-btn" aria-label="今の文の先頭へ" onClick={() => firstPlay(() => engine.current?.restart())} disabled={!ready}>
+          <button className="icon-btn" aria-label="今の文の先頭へ" onClick={() => moveBy(0)} disabled={!ready}>
             ↺
           </button>
           <button className="icon-btn big" aria-label={playing ? "停止" : "再生"} onClick={() => firstPlay(() => (es?.phase === "gap" ? engine.current?.pause() : engine.current?.toggle()))} disabled={!ready}>
             {playing || es?.phase === "gap" ? "⏸" : "▶"}
           </button>
-          <button className="icon-btn" aria-label="次の文へ" onClick={() => firstPlay(() => engine.current?.next())} disabled={!ready}>
+          <button className="icon-btn" aria-label="次の文へ" onClick={() => moveBy(1)} disabled={!ready}>
             ⏭
           </button>
           <button
