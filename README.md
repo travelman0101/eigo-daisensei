@@ -55,7 +55,52 @@
 - 字幕の文言は AI への指示として扱いません（システム指示でデータと明示し、返答の形と単語列を検証）。
 
 ### 解析時間の上限: 1 教材 10 分
-5 分の区間で約 320 ニューロン・待ち 20〜40 秒（実測予定値は下の「実測」参照）。10 分なら待ち 1 分前後で、反復練習の単位としても十分な長さのため。超えると「範囲を狭めるか分けて取り込む」と案内します。1 人 1 日の上限: 字幕取得 20 本、解析の AI 呼び出し 600 回（キャッシュ命中は数えない）、辞書 300 回（ログインなしは 1 IP 30 回）。
+5 分の区間で約 280〜320 ニューロン・待ち 20〜40 秒（下の「本番での実測」参照）。10 分なら待ち 1 分前後で、反復練習の単位としても十分な長さのため。超えると「範囲を狭めるか分けて取り込む」と案内します。1 人 1 日の上限: 字幕取得 20 本、解析の AI 呼び出し 600 回（キャッシュ命中は数えない）、辞書 300 回（ログインなしは 1 IP 30 回）。
+
+## 本番での実測（2026-10-23）
+| 項目 | 結果 |
+|---|---|
+| 60 分の動画（NASA, 1:00:11）の 05:00〜10:00 | 文が切れない 4:55.6〜10:07.0 に広げる提案 → 47 文。字幕取得 1 回 4.1 秒、句読点の復元 0 回（字幕に句読点あり）、訳 8 回・276 ニューロン・約 25 秒 |
+| 同じ URL・同じ区間の再入力、再読み込み | 「保存済みの教材を開く」→ 字幕取得・AI ともに 0 回。再読み込みから文の表示まで 111ms、通信は /api/me と /api/backup だけ |
+| 再訪から再生までの操作 | ホーム → 「続きから」→ ▶ の 2 タップ |
+| 文末の自動停止（公式プレイヤー、PC の Chrome） | 目標 69.580 秒 → 69.582 秒（+2ms）、目標 129.934 秒 → 129.901 秒（−33ms、早めに止める設計）。待ち時間は聞いた長さと同じ（10 秒の文 → 10 秒） |
+| シーク | 9〜56ms 手前に着地。再生位置の更新は約 6ms ごと |
+| 辞書（AI） | 新しい語は約 2.8 秒、2 回目以降は端末から即時 |
+| 字幕の取得率（候補 21 本） | 15 本取得。VOA の初級講座・1 分動画 6 本は YouTube に字幕がなく取得不可（Supadata は字幕なしでも 1 クレジット消費） |
+
+字幕の時刻は字幕の行の時刻で、多くの文は行の途中で区切るため「推定」になります。音声での聞き比べ（語頭・語尾が切れないか）は人の耳での確認が必要で、ずれは「時刻の補正」で直せます。
+
+## 見本教材（15 本）
+| レベル | 動画 | 練習区間 | 話速 | 利用条件 |
+|---|---|---|---|---|
+| A1 | Let's Learn English Lesson 1（VOA） | 0:00–2:00 | 122 語/分 | パブリックドメイン |
+| A1 | Easy With Ella: The Rainy Day…（Level 1） | 0:00–2:01 | 91 | CC BY |
+| A1 | Easy With Ella: The Rain Day Helpers（Level 1） | 0:00–2:00 | 126 | CC BY |
+| A2 | Instructional Classroom Language（VOA） | 0:29–2:30 | 94 | パブリックドメイン |
+| A2 | Everyday Grammar: Ramen（VOA） | 0:00–2:00 | 144 | パブリックドメイン |
+| A2 | Everyday Grammar TV: Grammar for Exercise（VOA） | 0:00–2:00 | 133 | パブリックドメイン |
+| B1 | English in a Minute: To Poison the Well（VOA） | 0:00–0:59 | 118 | パブリックドメイン |
+| B1 | How to Pronounce: Using What You Have Learned（VOA） | 0:00–1:54 | 129 | パブリックドメイン |
+| B1 | Learning English Podcast: Coffee（VOA） | 0:55–3:06 | 108 | パブリックドメイン |
+| B2 | ScienceCasts: Planetary Defense（NASA） | 0:24–2:39 | 145 | パブリックドメイン |
+| B2 | Planetary Defenders（NASA） | 1:59–4:02 | 169 | パブリックドメイン |
+| B2 | NASA Moon Base: Rovers（NASA） | 0:54–3:01 | 180 | パブリックドメイン |
+| C1 | NASA Moon Base: Lunar Landers（NASA） | 1:00–3:00 | 221 | パブリックドメイン |
+| C1 | Moonbound Episode 1（NASA） | 1:55–4:00 | 216 | パブリックドメイン |
+| C1 | Moonbound Episode 2（NASA） | 2:00–4:00 | 192 | パブリックドメイン |
+
+レベルは話速・語彙・文の長さ・内容からの目安で、公式の判定ではありません。作り方: 本番アプリで取り込み → バックアップから書き出し → `node scripts/make-samples.mjs`（レベル・理由・出典は `scripts/samples.meta.json`）。訳と区切りは AI が作成。CC BY の動画は出典を練習画面に表示しています。
+
+## テスト
+- 単体・API（Vitest、Workers 実行環境と D1）: 76 件
+- 画面（Playwright、スマホ幅 390×844 とデスクトップ幅、模擬の字幕・AI・プレイヤー）: 21 件
+- 本番の実操作（アプリ内ブラウザ）: Google ログイン、60 分動画の区間解析、再入力・再読み込みで AI 0 回、見本 15 本の表示と埋め込み、文末停止の精度、辞書（本物の AI）
+
+## 既知の制約
+- 字幕のない動画は自動では教材にできません（字幕ファイル・文字起こしの貼り付けで代替）。
+- 時刻の多くは推定です。品詞など辞書の一部は AI の誤りがあり得ます（例: staging を句動詞と表示）。
+- Google ログインは「テスト中」のため、Google Cloud のテストユーザーに登録した人だけが使えます。
+- iPhone などスマホ実機・モバイル Safari では未確認（スマホ幅の確認はパソコンの Chromium によるエミュレーション）。
 
 ## 公式プレイヤーでできること・できないこと
 | できる | できない／しない |
@@ -111,4 +156,4 @@ Google OAuth のリダイレクト URI: `https://eigo-daisensei.ichi-apps.worker
 反復 3 回、待ち時間「聞いた長さ ×1.0」（聞いたのと同じだけ発話の時間をとるため）、前余白 0.15 秒・後余白 0.25 秒（推定時刻のずれで語頭・語尾が切れないため）。科学的な最適値や上達の保証ではありません。参考: [Oxford](https://teachingenglishwithoxford.oup.com/2013/01/23/shadowing-a-useful-technique-for-autonomous-practice-of-listening-and-speaking/)・[British Council](https://africa.teachingenglish.org.uk/classroom/pronunciation/shadowing)
 
 ## ライセンスと出典
-コードは個人の学習用に公開しています。見本教材の字幕はパブリックドメイン（米国政府の著作物: VOA Learning English・NASA）の動画のものだけを使い、各教材に出典を表示します（VOA: [利用条件](https://learningenglish.voanews.com/p/6861.html)）。
+コードは個人の学習用に公開しています。見本教材の字幕は、パブリックドメイン（米国政府の著作物: VOA Learning English・NASA）か、投稿者が CC BY（クリエイティブ・コモンズ表示）を付けた動画（Easy With Ella）のものだけを使い、各教材に出典を表示します（VOA: [利用条件](https://learningenglish.voanews.com/p/6861.html)、NASA: [メディア利用ガイドライン](https://www.nasa.gov/nasa-brand-center/images-and-media/)）。
