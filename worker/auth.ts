@@ -84,6 +84,15 @@ export const requireUser: MiddlewareHandler<AppEnv> = async (c, next) => {
   await next();
 };
 
+/** A readable page instead of bare text, with a way back. */
+const loginFailed = (c: Context<AppEnv>) =>
+  c.html(
+    `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>ログインできませんでした</title>` +
+      `<body style="font-family:system-ui;padding:24px;line-height:1.6"><h1 style="font-size:20px">ログインできませんでした</h1>` +
+      `<p>時間をおいてもう一度お試しください。続く場合は設定（Google のクライアント設定）を確認する必要があります。</p><p><a href="/settings">設定に戻る</a></p></body>`,
+    400,
+  );
+
 export const auth = new Hono<AppEnv>();
 
 auth.get("/google", (c) => {
@@ -119,13 +128,16 @@ auth.get("/callback", async (c) => {
     // The ID token comes straight from Google's token endpoint over TLS, so its
     // signature does not need to be re-verified (OIDC Core 3.1.3.7).
     claims = decodeIdToken(tokens.idToken()) as Record<string, unknown>;
-  } catch {
-    return c.text("Login failed", 400);
+  } catch (e) {
+    // OAuth error code only (e.g. invalid_client, invalid_grant); never the code, tokens or secret
+    console.error("login: token exchange failed", (e as { code?: string }).code ?? (e as Error).name);
+    return loginFailed(c);
   }
   const issOk = claims.iss === "https://accounts.google.com" || claims.iss === "accounts.google.com";
   const expOk = typeof claims.exp === "number" && claims.exp * 1000 > Date.now();
   if (!issOk || claims.aud !== c.env.GOOGLE_CLIENT_ID || !expOk || claims.email_verified !== true) {
-    return c.text("Login failed", 400);
+    console.error("login: id token rejected", { issOk, audOk: claims.aud === c.env.GOOGLE_CLIENT_ID, expOk, verified: claims.email_verified === true });
+    return loginFailed(c);
   }
   const email = String(claims.email ?? "");
   const userId = await upsertUser(

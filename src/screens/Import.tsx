@@ -159,11 +159,10 @@ export function Import() {
       const prep = await prepare(t, { title: meta?.title || videoId, author: meta?.author ?? "", duration }, start, end, (p) => setPhase({ k: "work", p }), ctl.signal, calls);
       const t2 = performance.now();
       const finish = async (s: number, e: number) => {
-        const t3 = performance.now();
         const m = await build(t, prep, s, e, (p) => setPhase({ k: "work", p }), ctl.signal, calls, {
           transcriptMs: Math.round(t1 - t0),
           punctMs: Math.round(t2 - t1),
-          translateMs: Math.round(performance.now() - t3),
+          translateMs: 0, // measured inside build()
           aiCalls: 0,
           cachedCalls: 0,
         });

@@ -661,10 +661,10 @@ table.usage th:first-child {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-@media (max-height: 700px) {
+@media (max-height: 760px) {
   .practice-top .video {
-    max-height: 32vh;
+    max-height: 30vh;
     aspect-ratio: auto;
-    height: 32vh;
+    height: 30vh;
   }
 }

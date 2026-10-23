@@ -133,6 +133,7 @@ export async function build(
   stats?: Material["stats"],
 ): Promise<Material> {
   const { job } = prep;
+  const began = performance.now();
   const inRange = sentencesInRange(prep.spans, start, end);
   const todo = [...new Set(inRange.map((s) => s.text))].filter((s) => !job.translations[s]);
   const batches: string[][] = [];
@@ -193,7 +194,7 @@ export async function build(
     punctuatedByAi: prep.punctuatedByAi,
     createdAt: now,
     updatedAt: now,
-    ...(stats ? { stats: { ...stats, aiCalls: calls.ai, cachedCalls: calls.cached } } : {}),
+    ...(stats ? { stats: { ...stats, translateMs: Math.round(performance.now() - began), aiCalls: calls.ai, cachedCalls: calls.cached } } : {}),
   };
   await guard(db().put("materials", material));
   await db().delete("jobs", job.key);
