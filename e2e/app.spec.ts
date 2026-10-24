@@ -113,6 +113,15 @@ test.describe("60 分の動画の 05:00〜10:00 だけを解析", () => {
   });
 
   test("キャンセルしても済んだ部分は残り、再開で続きから", async ({ page, api }) => {
+    test.slow(); // 10 minutes of mock analysis; slower browsers (WebKit) need the extra time
+    // the mock AI answers instantly: the server does its work, but the answer reaches the page a little
+    // later, so the cancel always lands mid-analysis (and the server cache is filled as in real life)
+    await page.route("**/api/analyze/punct", async (r) => {
+      const res = await r.fetch().catch(() => null);
+      if (!res) return r.abort().catch(() => {});
+      await new Promise((ok) => setTimeout(ok, 1500)); // WebKit can take over a second to land a click
+      await r.fulfill({ response: res }).catch(() => {});
+    });
     await login(page);
     await page.goto("/import?v=mockLong60m");
     await page.getByLabel("開始").fill("30:00");
@@ -120,7 +129,7 @@ test.describe("60 分の動画の 05:00〜10:00 だけを解析", () => {
     await page.getByRole("button", { name: "この区間を教材にする" }).click();
     await expect(page.getByText(/文の区切りを決めています|訳と意味のまとまり/)).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "キャンセル" }).click();
-    await expect(page.getByText("中断しました")).toBeVisible();
+    await expect(page.getByText("中断しました")).toBeVisible({ timeout: 15_000 });
     await page.getByRole("button", { name: "続きから再開" }).click();
     const widen = page.getByRole("button", { name: /文が切れないように広げる/ });
     await expect(page.locator(".now").or(widen)).toBeVisible({ timeout: 40_000 });
@@ -141,6 +150,7 @@ test.describe("練習（シンプルな操作）", () => {
     await expect(bar.getByRole("button")).toHaveCount(5);
     for (const name of ["前の文へ", "この文をくり返す", "次の文へ", "再生速度", "詳しい設定"]) await expect(bar.getByRole("button", { name })).toBeVisible();
     // on a phone: video, previous / current / next sentence and the bar never overlap
+    await page.getByRole("button", { name: "わかった" }).click();
     await page.getByRole("button", { name: "次の文へ" }).click();
     await expect(page.locator(".now")).toContainText("2 /");
     await togglePlay(page);
@@ -298,9 +308,11 @@ test.describe("練習（シンプルな操作）", () => {
     await closeSettings(page);
     await expect(page.locator(".now .ja")).toHaveCount(0);
     await expect(page.locator(".now .en")).toHaveClass(/hidden-text/);
+    if (await isPlaying(page)) await togglePlay(page); // playback may have moved on while changing settings
     await page.waitForTimeout(900);
+    const at = (await page.locator(".now").textContent())!.match(/^(\d+) \//)![1];
     await page.reload();
-    await expect(page.locator(".now")).toContainText("3 /");
+    await expect(page.locator(".now")).toContainText(`${at} /`);
     await expect(page.getByRole("button", { name: "再生速度" })).toHaveText("1.25x");
     await expect(page.locator(".now .en")).toHaveClass(/hidden-text/);
   });
@@ -314,11 +326,20 @@ test.describe("練習（シンプルな操作）", () => {
     await closeSettings(page);
     await page.waitForTimeout(1500);
     sheet = await openSettings(page);
+    const b = await playerTime(page); // B is where the second press lands (slower browsers press later)
     await sheet.getByRole("button", { name: "A–B ループ" }).click();
     await closeSettings(page);
     await expect(page.getByText("A–B をくり返し中")).toBeVisible();
-    await page.waitForTimeout(2500);
-    expect(await playerTime(page)).toBeLessThan(5000);
+    let wrapped = false;
+    let last = await playerTime(page);
+    for (let k = 0; k < 20 && !wrapped; k++) {
+      await page.waitForTimeout(300);
+      const now = await playerTime(page);
+      expect(now).toBeLessThan(b + 1500); // never runs past B
+      wrapped = now < last;
+      last = now;
+    }
+    expect(wrapped).toBe(true);
     await page.locator(".controls").getByRole("button", { name: "解除" }).click();
     const tc = await playerTime(page);
     await page.waitForTimeout(3000);
@@ -399,6 +420,163 @@ test.describe("単語帳とテスト", () => {
     await expect(page.locator("main")).toContainText("すべての単語（0）");
     await page.goto("/library");
     await expect(page.getByText("まだ教材がありません")).toBeVisible();
+  });
+});
+
+test.describe("ダブルタップの秒数（動画ごと）と字幕の広さ", () => {
+  const hint = (page: import("@playwright/test").Page) => page.locator(".tap-hint");
+
+  test("秒数は動画ごとに保存：新しい動画は 5 秒、A は 3 秒、B は 10 秒。再読み込み・バックアップ復元でも戻る", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    const urlA = page.url();
+    await expect(hint(page)).toContainText("−5秒");
+    let sheet = await openSettings(page);
+    await sheet.getByRole("button", { name: "3 秒" }).click();
+    await expect(sheet.getByText("この動画は 3 秒（保存済み）")).toBeVisible();
+    await closeSettings(page);
+    await expect(hint(page)).toContainText("−3秒");
+
+    await importRange(page, "mockShort02", "0:00", "1:00", { keepEdges: true });
+    const urlB = page.url();
+    await expect(hint(page)).toContainText("−5秒"); // A's choice does not leak into B
+    sheet = await openSettings(page);
+    await sheet.getByLabel("好きな秒数").fill("10");
+    await sheet.getByRole("button", { name: "この秒数にする" }).click();
+    await closeSettings(page);
+    await expect(hint(page)).toContainText("−10秒");
+
+    await importRange(page, "mockLong60m", "0:00", "1:00", { keepEdges: true });
+    await expect(hint(page)).toContainText("−5秒");
+
+    await page.goto(urlA);
+    await expect(hint(page)).toContainText("−3秒");
+    await page.reload();
+    await expect(hint(page)).toContainText("−3秒");
+    await page.goto(urlB);
+    await expect(hint(page)).toContainText("−10秒");
+
+    // restore from the backup on an emptied device
+    await page.waitForTimeout(3500);
+    await page.goto("/settings");
+    await page.getByRole("button", { name: "今すぐバックアップ" }).click();
+    await expect(page.getByText(/同期済み/)).toBeVisible({ timeout: 10_000 });
+    const names = await page.evaluate(async () => (await indexedDB.databases()).map((d) => d.name!).filter((n) => n.startsWith("eigo:")));
+    await page.evaluate(async (ns) => {
+      for (const n of ns) await new Promise((r) => { const q = indexedDB.deleteDatabase(n); q.onsuccess = q.onerror = q.onblocked = () => r(null); });
+    }, names);
+    await page.goto("/");
+    await expect(page.getByText(/バックアップから \d+ 件を復元しました/)).toBeVisible({ timeout: 10_000 });
+    await page.goto(urlA);
+    await expect(hint(page)).toContainText("−3秒");
+    await page.goto(urlB);
+    await expect(hint(page)).toContainText("−10秒");
+    // back to the default
+    sheet = await openSettings(page);
+    await sheet.getByRole("button", { name: "初期値（5 秒）に戻す" }).click();
+    await expect(sheet.getByText("この動画は初期値の 5 秒")).toBeVisible();
+  });
+
+  test("好きな秒数：不正な値は保存しない。7.5 秒なら表示と移動が一致し、タッチの 2 回タップで移動は 1 回だけ", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    const sheet = await openSettings(page);
+    const input = sheet.getByLabel("好きな秒数");
+    for (const bad of ["", "0", "-2", "0.5", "61", "abc"]) {
+      await input.fill(bad);
+      await sheet.getByRole("button", { name: "この秒数にする" }).click();
+      await expect(sheet.getByRole("alert")).toBeVisible();
+    }
+    await expect(sheet.getByText("この動画は初期値の 5 秒")).toBeVisible();
+    await input.fill("７.５"); // full-width digits from a Japanese keyboard
+    await sheet.getByRole("button", { name: "この秒数にする" }).click();
+    await expect(sheet.getByRole("alert")).toHaveCount(0);
+    await closeSettings(page);
+    await expect(hint(page)).toContainText("+7.5秒");
+
+    await page.evaluate(() => {
+      const w = window as unknown as { __player: { seek(ms: number): void; time(): number }; __seeks: { from: number; to: number }[] };
+      const orig = w.__player.seek.bind(w.__player);
+      w.__seeks = [];
+      w.__player.seek = (ms: number) => (w.__seeks.push({ from: w.__player.time(), to: ms }), orig(ms));
+    });
+    await togglePlay(page);
+    await page.waitForTimeout(1200);
+    const box = (await page.locator(".gesture").boundingBox())!;
+    await page.touchscreen.tap(box.x + box.width * 0.85, box.y + 20);
+    await page.waitForTimeout(120);
+    await page.touchscreen.tap(box.x + box.width * 0.85, box.y + 20);
+    await expect(page.locator(".seek-bubble")).toHaveText("+7.5秒");
+    await page.waitForTimeout(500);
+    const seeks = await page.evaluate(() => (window as unknown as { __seeks: { from: number; to: number }[] }).__seeks);
+    expect(seeks).toHaveLength(1);
+    expect(Math.round(seeks[0]!.to - seeks[0]!.from)).toBe(7500);
+    expect(await isPlaying(page)).toBe(true);
+
+    // at the end of the range the move is shorter, and the bubble says so
+    await page.evaluate(() => (window as unknown as { __player: { seek(ms: number): void } }).__player.seek(57_000));
+    await page.waitForTimeout(200);
+    await page.touchscreen.tap(box.x + box.width * 0.85, box.y + 20);
+    await page.waitForTimeout(120);
+    await page.touchscreen.tap(box.x + box.width * 0.85, box.y + 20);
+    await expect(page.locator(".seek-bubble")).toContainText("区間の端");
+  });
+
+  test("説明を閉じると字幕の欄が空いた所まで広がり、前後の文が多く見える。再生はそのまま、閉じた状態は保存", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    await page.getByRole("button", { name: "次の文へ" }).click();
+    await page.getByRole("button", { name: "次の文へ" }).click();
+    await page.waitForTimeout(500);
+    const playing = await isPlaying(page);
+    const area = page.locator(".gesture");
+    // how many pixels of sentence text can be read inside the subtitle area
+    const visible = () =>
+      page.evaluate(() => {
+        const g = document.querySelector(".gesture")!.getBoundingClientRect();
+        return [...document.querySelectorAll(".gesture .flow-s:not(.blank) .en")].reduce((sum, e) => {
+          const r = e.getBoundingClientRect();
+          return sum + Math.max(0, Math.min(r.bottom, g.bottom) - Math.max(r.top, g.top));
+        }, 0);
+      });
+    const h1 = (await area.boundingBox())!.height;
+    const n1 = await visible();
+    await page.getByRole("button", { name: "わかった" }).click();
+    await page.waitForTimeout(300);
+    const h2 = (await area.boundingBox())!.height;
+    const n2 = await visible();
+    expect(h2).toBeGreaterThan(h1 + 60);
+    expect(n2).toBeGreaterThan(n1 + 40);
+    expect(await isPlaying(page)).toBe(playing); // closing the tip does not touch the player
+    await expect(page.locator(".now")).toContainText(/^[34] \//);
+    // the subtitles end above the bar; the video keeps YouTube's minimum size
+    const barTop = (await page.locator(".controls").boundingBox())!.y;
+    const g = (await area.boundingBox())!;
+    expect(g.y + g.height).toBeLessThanOrEqual(barTop + 1);
+    expect((await page.locator(".video").boundingBox())!.height).toBeGreaterThanOrEqual(199);
+    // the space under the bar is not wasted: the page itself does not scroll
+    expect(await page.evaluate(() => document.documentElement.scrollHeight - innerHeight)).toBeLessThanOrEqual(2);
+    await page.reload();
+    await expect(page.locator(".now")).toBeVisible();
+    await expect(page.getByRole("button", { name: "わかった" })).toHaveCount(0);
+    const sheet = await openSettings(page);
+    await sheet.getByRole("button", { name: "操作の説明をもう一度見る" }).click();
+    await expect(page.getByRole("button", { name: "わかった" })).toBeVisible();
+  });
+
+  test("短い画面でも、訳つきの字幕は操作バーに重ならず欄の中でスクロールできる", async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 600 });
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    await page.getByRole("button", { name: "わかった" }).click();
+    const area = page.locator(".gesture");
+    const g = (await area.boundingBox())!;
+    expect(g.height).toBeGreaterThanOrEqual(149);
+    expect(g.y + g.height).toBeLessThanOrEqual((await page.locator(".controls").boundingBox())!.y + 1);
+    expect((await page.locator(".video").boundingBox())!.height).toBeGreaterThanOrEqual(199);
+    const scrollable = await area.evaluate((e) => e.scrollHeight > e.clientHeight && getComputedStyle(e).overflowY === "auto");
+    expect(scrollable).toBe(true);
+    await expect(page.locator(".now .ja")).toBeVisible();
   });
 });
 

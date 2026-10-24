@@ -1,7 +1,8 @@
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { edgeExactness } from "../../shared/material";
+import { SEEK_DEFAULT, SEEK_PRESETS, formatSeconds, migrateSeek, parseSeekInput, seekSecondsFor } from "../../shared/seek";
 import type { Material } from "../../shared/types";
 import { formatTime, watchUrl } from "../../shared/youtube";
 import { useApp } from "../App";
@@ -46,6 +47,11 @@ export function Practice({ id }: { id: string }) {
   const tapTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const bypass = useRef(false);
   const navTarget = useRef<{ i: number; at: number } | null>(null);
+  // the subtitle area fills the space left on screen and scrolls; it keeps the previous sentence at its top
+  const subs = useRef<HTMLDivElement>(null);
+  const anchor = useRef({ key: "", done: "" });
+  const userScrollAt = useRef(0);
+  const bar = useRef<HTMLDivElement>(null);
   // the list view follows the playing sentence until the learner scrolls it by hand
   const [follow, setFollow] = useState(true);
   const holder = useRef<HTMLDivElement>(null);
@@ -54,6 +60,30 @@ export function Practice({ id }: { id: string }) {
   const listRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const progressRef = useRef<Progress | null>(null);
+
+  useLayoutEffect(() => {
+    const a = anchor.current;
+    const box = subs.current;
+    if (!box || a.key === a.done) return;
+    a.done = a.key;
+    if (performance.now() - userScrollAt.current < 4000) return;
+    const el = box.querySelector<HTMLElement>(".flow-s.before:not(.blank)") ?? box.querySelector<HTMLElement>(".now");
+    if (el && box.contains(el) && !box.querySelector(".sent-list")) box.scrollTop += el.getBoundingClientRect().top - box.getBoundingClientRect().top - 2;
+  });
+  useEffect(() => {
+    // Safari's bars, rotation: lay the subtitles out again
+    const again = () => (anchor.current.done = "");
+    addEventListener("resize", again);
+    return () => removeEventListener("resize", again);
+  }, []);
+  // the bar's real height (it grows with the A–B or wait row) is kept free below the subtitles
+  useEffect(() => {
+    const el = bar.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => document.documentElement.style.setProperty("--bar-h", `${Math.ceil(el.getBoundingClientRect().height)}px`));
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
 
   // load material, progress and settings from the device (no network, no AI)
   useEffect(() => {
@@ -65,7 +95,22 @@ export function Practice({ id }: { id: string }) {
       const p: Progress = (await db().get("progress", id)) ?? { materialId: id, sentenceIndex: 0, ratings: {}, adjust: {}, plays: 0, lastAt: Date.now(), updatedAt: Date.now() };
       progressRef.current = p;
       setProgress(p);
-      setSettings(await getSettings());
+      let st = await getSettings();
+      if (!st.seekMigrated) {
+        const legacy = (await getKv<Partial<Settings>>("settings", {})).seekSeconds;
+        const practised = new Set<string>();
+        for (const pr of await db().getAll("progress")) {
+          const mm = await db().get("materials", pr.materialId);
+          if (mm) practised.add(mm.videoId);
+        }
+        const moved = migrateSeek(legacy, st.seekByVideo, [...practised]);
+        if (moved) {
+          st = { ...st, seekByVideo: moved, seekMigrated: true };
+          await setKv("settings", st);
+          void markDirty("settings", "settings");
+        }
+      }
+      setSettings(st);
       setM(mat);
       if (mat.sample && navigator.onLine) void refreshSample(id.slice(7)).then((fresh) => fresh && setM(fresh));
       setTip(!(await getKv("seenPracticeTip", false)));
@@ -78,6 +123,7 @@ export function Practice({ id }: { id: string }) {
   const adjustMap = useMemo(() => JSON.parse(adjustKey) as Progress["adjust"], [adjustKey]);
   const offset = progress?.offset ?? 0;
   const flow = settings?.practice === "flow";
+  const seek = m && settings ? seekSecondsFor(settings.seekByVideo, m.videoId) : { seconds: SEEK_DEFAULT, saved: false };
   const exact = useMemo(() => (m ? edgeExactness(m.sentences, m.segments) : []), [m]);
   const adjustOf = useCallback(
     (i: number) => {
@@ -116,7 +162,8 @@ export function Practice({ id }: { id: string }) {
       if (e.type === "ready") setReady(true);
       if (e.type === "error") setPlayerError(e.message);
       if (e.type === "state" && e.playing) setTapHint(false);
-      if (e.type === "state" && (e.state === 1 || e.state === 2 || e.state === 0)) engine.current?.external(e.state === 1);
+      if (e.type === "state" && e.state === 0) engine.current?.ended();
+      else if (e.type === "state" && (e.state === 1 || e.state === 2)) engine.current?.external(e.state === 1);
     })
       .then((p) => {
         if (!alive) return p.destroy();
@@ -217,7 +264,7 @@ export function Practice({ id }: { id: string }) {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-      const secs = (settings?.seekSeconds ?? 5) * 1000;
+      const secs = seek.seconds * 1000;
       if (e.key === " ") {
         e.preventDefault();
         engine.current?.toggle();
@@ -226,7 +273,7 @@ export function Practice({ id }: { id: string }) {
     };
     addEventListener("keydown", onKey);
     return () => removeEventListener("keydown", onKey);
-  }, [settings?.seekSeconds]);
+  }, [seek.seconds]);
 
   const firstPlay = (fn: () => void) => {
     fn();
@@ -251,6 +298,7 @@ export function Practice({ id }: { id: string }) {
   const heard = flow && es?.phase === "playing" ? units.reduce((k, u, i) => (u.start <= t - settings.displayDelay ? i : k), 0) : -1;
   const sIdx = Math.min(heard >= 0 ? (units[heard]?.sentence ?? curSentence) : curSentence, m.sentences.length - 1);
   const s = m.sentences[sIdx]!;
+  anchor.current.key = `${sIdx}|${tip}|${settings.view}|${flow}|${settings.showJa}|${settings.showEn}|${panel}`;
   const playing = es?.phase === "playing";
   const gapLeft = es?.phase === "gap" && es.gapUntil ? Math.max(0, es.gapUntil - performance.now()) : 0;
   const chunkIdx = unitKind === "chunk" && curUnit ? units.slice(0, es!.unit + 1).filter((u) => u.sentence === sIdx).length - 1 : -1;
@@ -291,9 +339,12 @@ export function Practice({ id }: { id: string }) {
     if (lastTap.current && now - lastTap.current.at < 300 && lastTap.current.side === side) {
       clearTimeout(tapTimer.current);
       lastTap.current = null;
-      const ms = settings.seekSeconds * 1000 * (side === "l" ? -1 : 1);
-      engine.current?.seekBy(ms);
-      setBubble({ side, text: `${side === "l" ? "−" : "+"}${settings.seekSeconds}秒`, at: now });
+      const ms = seek.seconds * 1000 * (side === "l" ? -1 : 1);
+      const moved = engine.current?.seekBy(ms) ?? 0;
+      // at the edge of the range (or of A–B) the move is shorter: say so instead of the setting
+      const edge = Math.abs(moved - ms) > 150;
+      const secs = edge ? Math.abs(moved) / 1000 : seek.seconds;
+      setBubble({ side, text: `${side === "l" ? "−" : "+"}${formatSeconds(secs)}秒${edge ? (es?.ab ? "（A–B の端）" : "（区間の端）") : ""}`, at: now });
       return;
     }
     lastTap.current = { at: now, side };
@@ -362,7 +413,7 @@ export function Practice({ id }: { id: string }) {
   };
 
   return (
-    <main style={{ paddingBottom: 96 }}>
+    <main className={`practice ${panel === "timing" ? "" : "fill"}`}>
       <div className="practice-top">
         <div className="row between" style={{ marginBottom: 6 }}>
           <button className="btn sm ghost" onClick={() => navigate(m.sample ? "/" : "/library")}>
@@ -383,18 +434,35 @@ export function Practice({ id }: { id: string }) {
 
 
 
-      <div className="gesture" onClickCapture={onSubtitleTap}>
+      {tip && (
+        <div className="flash card small" style={{ margin: "0 0 8px" }}>
+          動画をタップすると再生／停止。字幕の左半分を 2 回タップで {formatSeconds(seek.seconds)} 秒戻る、右半分で進む（秒数は ⚙ で動画ごとに変更）。動画の上を 2 回タップしたときは YouTube 自体の機能で約 10 秒動きます。🔁 で今の文をくり返します。単語をタップすると意味が出ます。練習の段階・一文練習・録音などは ⚙ にあります。
+          <div style={{ marginTop: 6 }}>
+            <button className="btn sm" onClick={() => (setTip(false), void setKv("seenPracticeTip", true))}>
+              わかった
+            </button>
+          </div>
+        </div>
+      )}
+      <div
+        className="gesture"
+        ref={subs}
+        onClickCapture={onSubtitleTap}
+        onTouchMove={() => (userScrollAt.current = performance.now())}
+        onWheel={() => (userScrollAt.current = performance.now())}
+      >
       {settings.view === "current" && flow ? (
         <div className="flow-view" aria-live="off">
-          {[sIdx - 1, sIdx, sIdx + 1].map((i) => {
+          {Array.from({ length: 13 }, (_, k) => sIdx - 4 + k).map((i) => {
             const x = m.sentences[i];
-            if (!x) return <div key={`blank${i}`} className="flow-s blank" />;
+            if (!x) return i === sIdx - 1 ? <div key={`blank${i}`} className="flow-s blank" /> : null;
             const cur = i === sIdx;
+            const place = cur ? "cur now" : i === sIdx - 1 ? "before" : i === sIdx + 1 ? "after" : i < sIdx ? "far far-before" : "far far-after";
             return (
               <div
                 key={x.id}
                 data-i={i}
-                className={`flow-s ${cur ? "cur now" : i < sIdx ? "before" : "after"} ${x.edge ? "edge" : ""}`}
+                className={`flow-s ${place} ${x.edge ? "edge" : ""}`}
                 role="button"
                 tabIndex={0}
                 aria-label={`${i + 1} 文目から再生`}
@@ -465,25 +533,15 @@ export function Practice({ id }: { id: string }) {
 
       </div>
       <p className="small muted tap-hint" aria-hidden>
-        ← 2回タップで −{settings.seekSeconds}秒 ｜ +{settings.seekSeconds}秒 2回タップ →
+        ← 字幕を2回タップで −{formatSeconds(seek.seconds)}秒 ｜ +{formatSeconds(seek.seconds)}秒 →
       </p>
       {bubble && performance.now() - bubble.at < 700 && <div className={`seek-bubble ${bubble.side}`}>{bubble.text}</div>}
       {m.sample && (
-        <p className="small muted" style={{ margin: "4px 4px 0" }}>
+        <p className="small muted one-line" style={{ margin: "4px 4px 0" }} title={`出典: ${m.sample.credit}（${m.sample.license}）`}>
           <span className="badge">{m.sample.level} の目安</span> 出典: <a href={m.sample.sourceUrl} target="_blank" rel="noreferrer">{m.sample.credit}</a>（{m.sample.license}）
         </p>
       )}
 
-      {tip && (
-        <div className="flash card small">
-          動画をタップすると再生／停止。字幕の左半分を 2 回タップで戻る、右半分で進む。🔁 で今の文をくり返します。単語をタップすると意味が出ます。練習の段階・一文練習・録音などは ⚙ にあります。
-          <div style={{ marginTop: 6 }}>
-            <button className="btn sm" onClick={() => (setTip(false), void setKv("seenPracticeTip", true))}>
-              わかった
-            </button>
-          </div>
-        </div>
-      )}
       <AnimatePresence>
         {panel === "timing" && (
           <motion.section className="glass card" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}>
@@ -541,7 +599,7 @@ export function Practice({ id }: { id: string }) {
 
       {createPortal(
         <>
-      <div className="controls glass slim">
+      <div className="controls glass slim" ref={bar}>
         {es?.ab && (
           <div className="row small" style={{ justifyContent: "center", marginBottom: 6 }}>
             <span className="muted">A–B をくり返し中</span>
@@ -592,6 +650,16 @@ export function Practice({ id }: { id: string }) {
             <motion.div className="backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setPanel("none")} />
             <motion.div className="sheet" role="dialog" aria-label="練習の設定" initial={{ y: "100%", x: "-50%" }} animate={{ y: 0, x: "-50%" }} exit={{ y: "100%", x: "-50%" }} transition={{ type: "spring", damping: 30, stiffness: 320 }}>
               <div className="grab" />
+              <SeekSetting
+                seconds={seek.seconds}
+                saved={seek.saved}
+                onChange={(v) => {
+                  const byVideo = { ...settings.seekByVideo };
+                  if (v == null) delete byVideo[m.videoId];
+                  else byVideo[m.videoId] = v;
+                  updateSettings({ seekByVideo: byVideo });
+                }}
+              />
               <h2>表示</h2>
               <div className="chips wrap" style={{ flexWrap: "wrap", marginBottom: 14 }}>
                 <button className={`chip ${settings.showEn ? "on" : ""}`} aria-pressed={settings.showEn} onClick={() => updateSettings({ showEn: !settings.showEn })}>
@@ -653,6 +721,9 @@ export function Practice({ id }: { id: string }) {
               <div className="stack" style={{ marginTop: 14 }}>
                 <button className="btn" style={{ width: "100%" }} onClick={() => (setPanel("none"), firstPlay(() => engine.current?.toStart()))}>
                   ⇤ 区間の最初から再生
+                </button>
+                <button className="btn" style={{ width: "100%" }} onClick={() => (setPanel("none"), setTip(true))}>
+                  操作の説明をもう一度見る
                 </button>
                 {m.sample && <p className="small muted">{m.sample.level} の目安: {m.sample.reason}（公式の判定ではありません）</p>}
                 <p className="small muted">
@@ -726,13 +797,76 @@ function PracticeSettings({ settings, update, flow }: { settings: Settings; upda
           <Seg label="時刻が推定の文の端に足す余白" value={settings.estMargin} options={[[0, "なし"], [200, "0.2 秒"], [400, "0.4 秒"]]} onChange={(estMargin) => update({ estMargin })} />
         </>
       )}
-      <Seg label="字幕を 2 回タップで戻る・進む秒数" value={settings.seekSeconds} options={[[3, "3 秒"], [5, "5 秒"], [10, "10 秒"]]} onChange={(seekSeconds) => update({ seekSeconds })} />
       <Seg label="再生速度" value={settings.rate} options={RATES.map((r) => [r, `${r}x`] as [number, string])} onChange={(rate) => update({ rate })} />
       <Seg label="字幕の表示を遅らせる（Bluetooth イヤホンで音が遅れて聞こえるとき）" value={settings.displayDelay} options={[[0, "なし"], [150, "0.15 秒"], [250, "0.25 秒"], [400, "0.4 秒"]]} onChange={(displayDelay) => update({ displayDelay })} />
       <Seg label="前後の余白（語頭・語尾が切れるとき）" value={`${settings.padPre}/${settings.padPost}`} options={[["0/0", "なし"], ["150/250", "標準"], ["300/500", "多め"]]} onChange={(v) => {
         const [a, b] = v.split("/").map(Number);
         update({ padPre: a!, padPost: b! });
       }} />
+    </div>
+  );
+}
+
+/** ±N seconds for this video: presets, a typed value (checked), and back to the default. */
+function SeekSetting({ seconds, saved, onChange }: { seconds: number; saved: boolean; onChange: (v: number | null) => void }) {
+  const [text, setText] = useState("");
+  const [error, setError] = useState("");
+  const apply = () => {
+    const r = parseSeekInput(text);
+    if (!r.ok) return setError(r.message);
+    setError("");
+    setText("");
+    onChange(r.seconds);
+  };
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <h2>字幕を 2 回タップで動く秒数（この動画）</h2>
+      <div className="chips wrap" style={{ flexWrap: "wrap", marginBottom: 8 }}>
+        {SEEK_PRESETS.map((v) => (
+          <button key={v} className={`chip ${seconds === v ? "on" : ""}`} aria-pressed={seconds === v} onClick={() => (setError(""), onChange(v))}>
+            {v} 秒
+          </button>
+        ))}
+      </div>
+      <form
+        className="row"
+        style={{ gap: 6 }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          apply();
+        }}
+      >
+        <input
+          className="field"
+          style={{ width: 110, fontSize: 16 }}
+          inputMode="decimal"
+          placeholder="例: 7.5"
+          aria-label="好きな秒数"
+          aria-invalid={!!error}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+        <span className="small">秒</span>
+        <button className="btn sm" type="submit">
+          この秒数にする
+        </button>
+      </form>
+      {error && (
+        <div className="small" role="alert" style={{ color: "var(--bad)", marginTop: 4 }}>
+          {error}
+        </div>
+      )}
+      <p className="small muted" style={{ margin: "6px 0 0" }}>
+        {saved ? `この動画は ${formatSeconds(seconds)} 秒（保存済み）` : `この動画は初期値の ${SEEK_DEFAULT} 秒`}・1〜60 秒で指定できます。
+        {saved && (
+          <button className="btn sm ghost" style={{ marginLeft: 6 }} onClick={() => onChange(null)}>
+            初期値（{SEEK_DEFAULT} 秒）に戻す
+          </button>
+        )}
+      </p>
+      <p className="small muted" style={{ margin: "4px 0 0" }}>
+        動画の上を 2 回タップしたときは YouTube 自体の機能で約 10 秒動きます（アプリからは変えられません）。
+      </p>
     </div>
   );
 }

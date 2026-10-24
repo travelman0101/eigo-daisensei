@@ -74,8 +74,11 @@ export interface Settings {
   displayDelay: number;
   /** extra margin on sentence edges whose time is estimated inside a caption line (one-sentence practice), ms */
   estMargin: number;
-  /** seconds moved by a double tap on the left / right half of the subtitles */
-  seekSeconds: number;
+  /** (old) one value for every video; read once to move it into seekByVideo */
+  seekSeconds?: number;
+  /** seconds moved by a double tap on the left / right half of the subtitles, per YouTube video id (unset = 5) */
+  seekByVideo: Record<string, number>;
+  seekMigrated?: boolean;
   unit: "chunk" | "sentence" | "multi";
   multiCount: number;
   mode: "listen" | "repeat" | "shadow";
@@ -102,7 +105,7 @@ export const DEFAULT_SETTINGS: Settings = {
   practice: "flow",
   displayDelay: 0,
   estMargin: 200,
-  seekSeconds: 5,
+  seekByVideo: {},
   unit: "sentence",
   multiCount: 2,
   mode: "repeat",

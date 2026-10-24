@@ -267,6 +267,37 @@ describe("sentence loop, ±N seconds and the YouTube player's own controls", () 
     expect(r.engine.state.phase).toBe("playing");
   });
 
+  it("seekBy moves exactly N seconds once, says how far it really went, and stays inside A–B", () => {
+    const r = rig();
+    r.engine.setFlow(true);
+    r.engine.playUnit(0);
+    r.advance(200); // 1200
+    expect(r.engine.seekBy(3000)).toBe(3000);
+    expect(r.log.filter((l) => l.startsWith("seek@")).at(-1)).toBe("seek@4200");
+    expect(r.engine.seekBy(5000)).toBe(1800); // only to the range end
+    r.engine.setAB(2000, 4000);
+    r.advance(500); // 2500
+    expect(r.engine.seekBy(5000)).toBe(1200); // up to just before B
+    expect(r.engine.seekBy(-5000)).toBe(-1700); // back to A, not out of the loop
+    expect(r.engine.state.ab).toEqual({ a: 2000, b: 4000 });
+  });
+
+  it("when the video itself ends, goes back to the range start paused (YouTube replaying is undone)", () => {
+    const r = rig();
+    r.engine.setFlow(true);
+    r.engine.playUnit(2);
+    r.engine.ended();
+    expect(r.log.slice(-2)).toEqual(["seek@1000", "pause@1000"]);
+    expect(r.engine.state).toMatchObject({ phase: "idle", unit: 0 });
+    // YouTube starts playing after a seek on an ended video: the engine pauses it again
+    r.engine.external(true);
+    expect(r.log.at(-1)).toBe("pause@1000");
+    expect(r.engine.state.phase).toBe("idle");
+    r.advance(2100);
+    r.engine.external(true); // later, a real tap on the video plays as usual
+    expect(r.engine.state.phase).toBe("playing");
+  });
+
   it("follows play / pause done on the YouTube player itself", () => {
     const r = rig();
     r.engine.setFlow(true);

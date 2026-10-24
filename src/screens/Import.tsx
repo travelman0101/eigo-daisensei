@@ -147,6 +147,7 @@ export function Import() {
     try {
       setPhase({ k: "transcript" });
       const t = transcriptOverride ?? (await getTranscript(ctl.signal));
+      ctl.signal.throwIfAborted();
       const t1 = performance.now();
       const mid = await materialId(videoId, t.lang, t.hash, start, end);
       const already = await db().get("materials", mid);
@@ -157,6 +158,8 @@ export function Import() {
       const inRange = t.segments.some((s) => s.start < end && s.start + s.dur > start);
       if (!inRange) throw new ApiError(400, "empty_range", "この区間には字幕がありません。範囲を変えてください");
       const prep = await prepare(t, { title: meta?.title || videoId, author: meta?.author ?? "", duration }, start, end, (p) => setPhase({ k: "work", p }), ctl.signal, calls);
+      // a cancel pressed just as the last answer arrived still counts
+      ctl.signal.throwIfAborted();
       const t2 = performance.now();
       const finish = async (s: number, e: number) => {
         const m = await build(t, prep, s, e, (p) => setPhase({ k: "work", p }), ctl.signal, calls, {

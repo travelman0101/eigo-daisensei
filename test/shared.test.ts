@@ -12,6 +12,7 @@ import {
   mergeBlockSpans,
   spansFromMarks,
 } from "../shared/sentences";
+import { migrateSeek, parseSeekInput, seekSecondsFor } from "../shared/seek";
 import { newReview, review, isDue } from "../shared/srs";
 import { parsePastedTranscript, parseSubtitles } from "../shared/subtitles";
 import { cleanCaption, hasPunctuation, wordsFromSegments } from "../shared/text";
@@ -275,5 +276,28 @@ describe("subtitle files", () => {
       { text: "bye now", start: 4000, dur: 3000 },
     ]);
     expect(parsePastedTranscript("1:00:01 late line")).toEqual([{ text: "late line", start: 3_601_000, dur: 3000 }]);
+  });
+});
+
+describe("±N seconds per video", () => {
+  it("unset videos use 5, saved ones their own value", () => {
+    const by = { A: 3, B: 10 };
+    expect(seekSecondsFor(by, "A")).toEqual({ seconds: 3, saved: true });
+    expect(seekSecondsFor(by, "B")).toEqual({ seconds: 10, saved: true });
+    expect(seekSecondsFor(by, "C")).toEqual({ seconds: 5, saved: false });
+    expect(seekSecondsFor({ D: 0 }, "D")).toEqual({ seconds: 5, saved: false }); // broken value → default
+  });
+  it("checks typed seconds", () => {
+    expect(parseSeekInput("7.5")).toEqual({ ok: true, seconds: 7.5 });
+    expect(parseSeekInput("４秒")).toEqual({ ok: true, seconds: 4 }); // full-width from a Japanese keyboard
+    expect(parseSeekInput(" 2.04 ")).toEqual({ ok: true, seconds: 2 });
+    for (const bad of ["", "  ", "0", "-3", "0.5", "61", "1000", "abc", "1e3", "3..5"]) expect(parseSeekInput(bad).ok, bad).toBe(false);
+    expect(parseSeekInput("60")).toEqual({ ok: true, seconds: 60 });
+    expect(parseSeekInput("1")).toEqual({ ok: true, seconds: 1 });
+  });
+  it("moves an old common value (not the default) to the videos already practised", () => {
+    expect(migrateSeek(5, {}, ["A"])).toBeNull();
+    expect(migrateSeek(undefined, {}, ["A"])).toBeNull();
+    expect(migrateSeek(10, { A: 3 }, ["A", "B"])).toEqual({ A: 3, B: 10 });
   });
 });

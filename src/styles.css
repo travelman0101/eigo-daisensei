@@ -865,3 +865,67 @@ table.usage th:first-child {
     opacity: 0;
   }
 }
+
+/* practice: the subtitles take all the height left between the video and the bar */
+.app.in-practice {
+  padding-bottom: 0;
+}
+.practice {
+  padding-bottom: calc(var(--bar-h, 64px) + 18px + var(--safe-b));
+}
+.practice.fill {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 12px - var(--safe-t));
+  height: calc(100dvh - 12px - var(--safe-t));
+}
+.practice.fill > * {
+  flex: none;
+}
+.practice.fill .practice-top {
+  position: relative;
+  top: 0;
+}
+.practice.fill > .gesture {
+  flex: 1 1 auto;
+  min-height: 150px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  border-radius: var(--r-md);
+}
+.practice.fill .follow-btn {
+  bottom: 8px;
+}
+/* YouTube asks for a player of at least 200 × 200 px */
+.video {
+  min-height: 200px;
+}
+@media (max-height: 760px) {
+  .practice-top .video {
+    height: max(200px, 30vh);
+    max-height: none;
+  }
+}
+/* more sentences before / after: the next ones in full, the previous one up to 3 lines */
+.flow-s.before .en {
+  -webkit-line-clamp: 3;
+}
+.flow-s.after .en {
+  display: block;
+  overflow: visible;
+}
+.flow-s.far {
+  padding: 6px 14px;
+  opacity: 0.45;
+}
+.flow-s.far .en {
+  font-size: 15px;
+  font-weight: 500;
+}
+.flow-s.far-before .en {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

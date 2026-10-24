@@ -71,6 +71,7 @@ export class Engine {
     this.commanded = { playing: true, at: this.clock.now() };
     this.player.play();
   }
+  private rewoundAt = -Infinity;
   private pausePlayer() {
     this.commanded = { playing: false, at: this.clock.now() };
     this.player.pause();
@@ -190,12 +191,33 @@ export class Engine {
     this.set({ loop: on, unit, rep: 0 });
   }
 
-  /** Jump by ms (the ±N seconds double tap), staying inside the range and keeping the play state. */
-  seekBy(ms: number) {
-    const t = Math.max(this.range.start - this.settings.padPre, Math.min(this.range.end, this.player.time() + ms));
+  /**
+   * Jump by ms (the ±N seconds double tap), staying inside the range (inside A–B while it loops)
+   * and keeping the play state. Returns how far it really moved, which is less at an edge.
+   */
+  seekBy(ms: number): number {
+    const now = this.player.time();
+    const { ab } = this.state;
+    const lo = ab ? ab.a : this.range.start - this.settings.padPre;
+    const hi = ab ? Math.max(ab.a, ab.b - 300) : this.range.end;
+    const t = Math.max(lo, Math.min(hi, now + ms));
     this.clearTimers();
     this.player.seek(t);
     this.set({ unit: this.unitAt(t), rep: 0 });
+    return t - now;
+  }
+
+  /**
+   * The video itself ended (the range reaches the end of the video). Go back to the start of the
+   * range, paused, so the next play starts the practice again.
+   */
+  ended() {
+    this.clearTimers();
+    // YouTube starts playing again when an ended video is sought: keep it paused for a moment
+    this.rewoundAt = this.clock.now();
+    this.player.seek(this.range.start - this.settings.padPre);
+    this.pausePlayer();
+    this.set({ phase: "idle", unit: 0, rep: 0, gapUntil: null, continuous: this.flow });
   }
 
   /**
@@ -203,6 +225,7 @@ export class Engine {
    * follows instead of fighting it; a tap during a repetition wait means "again now".
    */
   external(playing: boolean) {
+    if (playing && this.clock.now() - this.rewoundAt < 2000) return this.player.pause();
     const c = this.commanded;
     if (c && c.playing === playing && this.clock.now() - c.at < 1500) return;
     if (playing && this.state.phase === "gap") return this.skipGap();

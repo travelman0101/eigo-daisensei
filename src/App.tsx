@@ -135,7 +135,7 @@ export function App() {
   return (
     <MotionConfig reducedMotion="user">
       <AppContext.Provider value={ctx}>
-        <div className="app">
+        <div className={`app ${inPractice ? "in-practice" : ""}`}>
           {!online && <div className="flash warn small" style={{ marginBottom: 10 }}>オフラインです。保存済みの教材の字幕・単語テストは使えます（動画の再生には通信が必要です）</div>}
           <AnimatePresence mode="wait">
             <motion.div key={p} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}>
