@@ -60,3 +60,21 @@ export async function importRange(page: Page, videoId: string, start: string, en
   if (await widen.isVisible()) await (opts.keepEdges ? keep : widen).click();
   await expect(page.locator(".now")).toBeVisible({ timeout: 30_000 });
 }
+
+/** The practice screen's ⚙ sheet holds the steps, one-sentence mode, display toggles, A–B and recording. */
+export async function openSettings(page: Page) {
+  await page.getByRole("button", { name: "詳しい設定" }).click();
+  await expect(page.getByRole("dialog", { name: "練習の設定" })).toBeVisible();
+  return page.getByRole("dialog", { name: "練習の設定" });
+}
+export async function closeSettings(page: Page) {
+  await page.getByRole("dialog", { name: "練習の設定" }).getByRole("button", { name: "閉じる" }).click();
+  await expect(page.getByRole("dialog", { name: "練習の設定" })).toHaveCount(0);
+}
+type FakePlayer = { time(): number; playing(): boolean; play(): void; pause(): void };
+export const playerTime = (page: Page) => page.evaluate(() => (window as unknown as { __player: FakePlayer }).__player.time());
+export const isPlaying = (page: Page) => page.evaluate(() => (window as unknown as { __player: FakePlayer }).__player.playing());
+/** Play / pause like the keyboard shortcut (on a phone the learner taps the YouTube video itself). */
+export async function togglePlay(page: Page) {
+  await page.locator("body").press(" ");
+}

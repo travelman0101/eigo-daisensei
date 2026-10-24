@@ -29,6 +29,8 @@ export interface EngineState {
   /** length of the current wait */
   gapMs: number;
   ab: { a: number; b: number } | null;
+  /** the current sentence repeats seamlessly until switched off (flow mode's 🔁) */
+  loop: boolean;
   /** the range (whole material) is playing straight through */
   continuous: boolean;
 }
@@ -54,7 +56,7 @@ const STOP_LEAD = 40;
  * fires the stop at the exact moment instead of waiting for the next tick.
  */
 export class Engine {
-  state: EngineState = { phase: "idle", unit: 0, rep: 0, gapUntil: null, gapMs: 0, ab: null, continuous: false };
+  state: EngineState = { phase: "idle", unit: 0, rep: 0, gapUntil: null, gapMs: 0, ab: null, loop: false, continuous: false };
   private timer: unknown = null;
   private stopTimer: unknown = null;
   /**
@@ -62,6 +64,17 @@ export class Engine {
    * repeats or waits, and moving to another sentence keeps playing from there.
    */
   private flow = false;
+  /** what the engine last asked the player to do, so the player echoing it back is not taken for a tap on the video */
+  private commanded: { playing: boolean; at: number } | null = null;
+
+  private play() {
+    this.commanded = { playing: true, at: this.clock.now() };
+    this.player.play();
+  }
+  private pausePlayer() {
+    this.commanded = { playing: false, at: this.clock.now() };
+    this.player.pause();
+  }
 
   constructor(
     private player: PlayerLike,
@@ -85,7 +98,7 @@ export class Engine {
     // a pending stop, repeat or wait from one-sentence practice must not fire after switching
     this.clearTimers();
     if (this.state.phase === "gap") {
-      this.player.pause();
+      this.pausePlayer();
       this.set({ phase: "idle", gapUntil: null });
     }
     this.set({ continuous: on, rep: 0 });
@@ -128,7 +141,7 @@ export class Engine {
     if (!u) return;
     this.clearTimers();
     this.player.seek(this.startOf(u));
-    this.player.play();
+    this.play();
     this.set({ phase: "playing", unit: i, rep: keepRep ? this.state.rep : 0, gapUntil: null, continuous: this.flow });
   }
 
@@ -140,7 +153,7 @@ export class Engine {
 
   pause() {
     this.clearTimers();
-    this.player.pause();
+    this.pausePlayer();
     this.set({ phase: "idle", gapUntil: null });
   }
 
@@ -149,7 +162,7 @@ export class Engine {
       // resume exactly where it paused; only outside the range does it jump to a sentence start
       const t = this.player.time();
       if (t >= this.range.start - 1000 && t < this.range.end - 200) {
-        this.player.play();
+        this.play();
         this.set({ phase: "playing", unit: this.unitAt(t), continuous: true });
       } else this.playUnit(t >= this.range.end - 200 ? 0 : this.unitAt(t));
       return;
@@ -159,15 +172,48 @@ export class Engine {
       const u = this.units[this.state.unit];
       const t = this.player.time();
       if (u && t >= u.start - 500 && t < u.end - 200) {
-        this.player.play();
+        this.play();
         this.set({ phase: "playing" });
       } else this.playUnit(this.state.unit);
     } else this.pause();
   }
 
-  /** In flow mode the current unit is the one being heard, not the last one started. */
+  /** In flow mode the current unit is the one being heard, not the last one started (unless it is looping). */
   private current() {
-    return this.flow ? this.unitAt(this.player.time()) : this.state.unit;
+    return this.flow && !this.state.loop ? this.unitAt(this.player.time()) : this.state.unit;
+  }
+
+  /** Repeat the sentence being heard without stopping; switching off lets the flow continue from there. */
+  setLoop(on: boolean) {
+    const unit = this.flow && !this.state.loop ? this.unitAt(this.player.time()) : this.state.unit;
+    this.clearTimers();
+    this.set({ loop: on, unit, rep: 0 });
+  }
+
+  /** Jump by ms (the ±N seconds double tap), staying inside the range and keeping the play state. */
+  seekBy(ms: number) {
+    const t = Math.max(this.range.start - this.settings.padPre, Math.min(this.range.end, this.player.time() + ms));
+    this.clearTimers();
+    this.player.seek(t);
+    this.set({ unit: this.unitAt(t), rep: 0 });
+  }
+
+  /**
+   * The learner played or paused with YouTube's own controls (tapping the video). The engine
+   * follows instead of fighting it; a tap during a repetition wait means "again now".
+   */
+  external(playing: boolean) {
+    const c = this.commanded;
+    if (c && c.playing === playing && this.clock.now() - c.at < 1500) return;
+    if (playing && this.state.phase === "gap") return this.skipGap();
+    if (playing && this.state.phase === "idle") {
+      this.clearTimers();
+      const t = this.player.time();
+      this.set({ phase: "playing", gapUntil: null, continuous: this.flow, ...(this.flow && !this.state.loop ? { unit: this.unitAt(t) } : {}) });
+    } else if (!playing && this.state.phase === "playing") {
+      this.clearTimers();
+      this.set({ phase: "idle", gapUntil: null });
+    }
   }
 
   next() {
@@ -190,11 +236,13 @@ export class Engine {
     this.set({ ab: { a, b } });
     this.clearTimers();
     this.player.seek(a);
-    this.player.play();
+    this.play();
     this.set({ phase: "playing", rep: 0 });
   }
   clearAB() {
-    // flow continues from where the loop is now; one-sentence practice keeps its unit
+    // flow continues from where the loop is now; one-sentence practice keeps its unit.
+    // A stop already scheduled for the loop end must not fire after the loop is gone.
+    this.clearTimers();
     this.set({ ab: null, unit: this.flow ? this.unitAt(this.player.time()) : this.state.unit });
   }
 
@@ -215,6 +263,7 @@ export class Engine {
     const flowing = this.flow || this.state.continuous || (this.settings.mode === "listen" && !this.settings.autoStop);
     let end: number;
     if (ab) end = ab.b;
+    else if (this.state.loop) end = Math.min(u.end + this.settings.padPost, this.range.end + this.settings.padPost);
     else if (flowing) {
       const at = this.unitAt(t);
       if (at !== this.state.unit && t < this.range.end) this.set({ unit: at });
@@ -244,14 +293,21 @@ export class Engine {
       this.set({ rep });
       return;
     }
+    if (this.state.loop) {
+      // seamless: back to the start of the same sentence, no pause
+      this.player.seek(this.startOf(u));
+      this.set({ rep });
+      return;
+    }
     if (this.flow || this.state.continuous || (s.mode === "listen" && !s.autoStop)) {
-      // the end of the range
-      this.player.pause();
+      // the end of the range (a late timer from an earlier boundary does not count)
+      if (this.player.time() < this.range.end - 300) return;
+      this.pausePlayer();
       this.set({ phase: "idle", continuous: this.flow });
       return;
     }
     if (s.mode === "listen") {
-      this.player.pause();
+      this.pausePlayer();
       this.set({ phase: "idle", rep });
       return;
     }
@@ -265,13 +321,13 @@ export class Engine {
         if (Math.abs(nu.start - u.end) > 400 || this.player.time() > nu.start + 300) this.player.seek(this.startOf(nu));
         this.set({ unit: unit + 1, rep: 0 });
       } else {
-        this.player.pause();
+        this.pausePlayer();
         this.set({ phase: "idle", rep });
       }
       return;
     }
     // repetition: stop, give time to say it, then again or the next unit
-    this.player.pause();
+    this.pausePlayer();
     const gap = this.gapFor(u);
     const go = () => {
       this.timer = null;

@@ -74,6 +74,8 @@ export interface Settings {
   displayDelay: number;
   /** extra margin on sentence edges whose time is estimated inside a caption line (one-sentence practice), ms */
   estMargin: number;
+  /** seconds moved by a double tap on the left / right half of the subtitles */
+  seekSeconds: number;
   unit: "chunk" | "sentence" | "multi";
   multiCount: number;
   mode: "listen" | "repeat" | "shadow";
@@ -100,6 +102,7 @@ export const DEFAULT_SETTINGS: Settings = {
   practice: "flow",
   displayDelay: 0,
   estMargin: 200,
+  seekSeconds: 5,
   unit: "sentence",
   multiCount: 2,
   mode: "repeat",

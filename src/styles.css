@@ -788,3 +788,80 @@ table.usage th:first-child {
   margin-top: 4px;
   font-size: 14px;
 }
+
+/* slim control bar: one row */
+.controls.slim {
+  padding: 8px 10px;
+  border-radius: 24px;
+}
+.controls.slim .main {
+  gap: 6px;
+}
+.pill {
+  flex: 1;
+  min-height: 44px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.85);
+  font-weight: 800;
+  font-size: 15px;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background 0.2s,
+    transform 0.15s var(--ease);
+}
+.pill:active {
+  transform: scale(0.97);
+}
+.pill.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.icon-btn.speed {
+  font-size: 14px;
+  font-weight: 800;
+}
+.gesture {
+  position: relative;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation; /* no double-tap zoom on phones */
+}
+.tap-hint {
+  text-align: center;
+  margin: 6px 0 0;
+  opacity: 0.8;
+}
+.seek-bubble {
+  position: fixed;
+  top: 42%;
+  z-index: 40;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.78);
+  color: #fff;
+  font-weight: 800;
+  pointer-events: none;
+  animation: bubble 0.7s var(--ease) forwards;
+}
+.seek-bubble.l {
+  left: 10%;
+}
+.seek-bubble.r {
+  right: 10%;
+}
+@keyframes bubble {
+  0% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  20% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+  }
+}

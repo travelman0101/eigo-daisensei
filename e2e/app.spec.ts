@@ -1,4 +1,4 @@
-import { ApiLog, expect, importRange, login, test } from "./fixtures";
+import { ApiLog, closeSettings, expect, importRange, isPlaying, login, openSettings, playerTime, test, togglePlay } from "./fixtures";
 
 test.describe("取り込み", () => {
   test("URL を貼ると取り込み画面が開き、時刻指定も読み取る", async ({ page }) => {
@@ -133,203 +133,212 @@ test.describe("60 分の動画の 05:00〜10:00 だけを解析", () => {
   });
 });
 
-test.describe("練習", () => {
-  test("文・まとまり・速度・字幕・訳の切り替えと、位置と設定の復元", async ({ page }) => {
+test.describe("練習（シンプルな操作）", () => {
+  test("操作バーは 1 段：前の文・くり返す・次の文・速度・設定だけ", async ({ page }) => {
     await login(page);
     await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
-    await page.getByRole("radio", { name: /一文練習/ }).click();
-    const card = page.locator(".now");
-    await expect(card).toContainText("1 /");
-    await page.getByRole("button", { name: "次の文へ" }).click();
-    await page.getByRole("button", { name: "次の文へ" }).click();
-    await expect(card).toContainText("3 /");
-    await page.getByRole("button", { name: "まとまり" }).click();
-    await expect(page.locator(".en .sep").first()).toBeVisible();
-    await page.getByRole("button", { name: "再生速度" }).click();
-    await expect(page.getByRole("button", { name: "再生速度" })).toHaveText("1.25x");
-    await page.getByRole("button", { name: "訳", exact: true }).click();
-    await expect(card.locator(".ja")).toHaveCount(0);
-    await page.getByRole("button", { name: "英語字幕" }).click();
-    await expect(card.locator(".en")).toHaveClass(/hidden-text/);
-    await page.getByRole("button", { name: "できた" }).click();
-    await page.waitForTimeout(900); // progress save is debounced
-    await page.reload();
-    await expect(card).toContainText("/");
-    await expect(page.getByRole("button", { name: "再生速度" })).toHaveText("1.25x");
-    await expect(card.locator(".en")).toHaveClass(/hidden-text/);
-    await expect(page.locator(".en .sep").first()).toBeVisible();
-    await expect(page.getByRole("button", { name: "できた" })).toHaveAttribute("aria-pressed", "true");
-  });
-
-  test("再生・文末で止まる・反復と待ち時間（テスト用プレイヤー）", async ({ page }) => {
-    await login(page);
-    await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
-    await page.getByRole("tab", { name: /区切ってまねる/ }).click();
-    await page.getByRole("button", { name: "一文" }).click();
-    await page.getByRole("button", { name: "再生", exact: true }).click();
-    await expect(page.getByText(/話してみよう/)).toBeVisible({ timeout: 10_000 });
-    const t = await page.evaluate(() => (window as unknown as { __player: { time(): number } }).__player.time());
-    expect(t).toBeGreaterThan(0);
-    await page.getByRole("button", { name: "飛ばす" }).click();
-    await expect(page.getByRole("button", { name: "停止" })).toBeVisible();
-    await page.getByRole("button", { name: "停止" }).click();
-    await expect(page.getByRole("button", { name: "再生", exact: true })).toBeVisible();
-  });
-
-  test("反復回数のあと次の文へ進む（再生回数の保存で反復が戻らない）", async ({ page }) => {
-    await login(page);
-    await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
-    await page.getByRole("tab", { name: /区切ってまねる/ }).click();
-    await page.getByRole("button", { name: "一文" }).click();
-    await page.getByRole("button", { name: "詳しい設定" }).click();
-    const sheet = page.getByRole("dialog", { name: "練習の設定" });
-    await sheet.getByRole("button", { name: "2", exact: true }).first().click();
-    await sheet.getByRole("button", { name: "なし", exact: true }).first().click();
-    await sheet.getByRole("button", { name: "閉じる" }).click();
-    await page.getByRole("button", { name: "再生", exact: true }).click();
-    await expect(page.locator(".now")).toContainText("2 /", { timeout: 20_000 });
-  });
-
-  test("A–B ループ", async ({ page }) => {
-    await login(page);
-    await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
-    await page.getByRole("button", { name: "再生", exact: true }).click();
-    await page.getByRole("button", { name: "A–B ループ" }).click();
-    await page.waitForTimeout(1500);
-    await page.getByRole("button", { name: "A–B ループ" }).click();
-    await expect(page.getByRole("button", { name: "A–B ループ" })).toHaveText("AB✓");
-    await page.waitForTimeout(2500);
-    const t = await page.evaluate(() => (window as unknown as { __player: { time(): number } }).__player.time());
-    expect(t).toBeLessThan(5000);
-  });
-
-  test("スマホ幅で動画・現在の文・操作が同時に見える", async ({ page }) => {
-    await login(page);
-    await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
-    const vh = page.viewportSize()!.height;
-    for (const loc of [page.locator(".video"), page.locator(".now .en"), page.getByRole("button", { name: "再生", exact: true })]) {
-      const b = (await loc.boundingBox())!;
-      expect(b.y).toBeGreaterThanOrEqual(0);
-      expect(b.y + Math.min(b.height, 40)).toBeLessThanOrEqual(vh);
-    }
-    const play = (await page.getByRole("button", { name: "再生", exact: true }).boundingBox())!;
-    expect(play.height).toBeGreaterThanOrEqual(44);
-  });
-});
-
-test.describe("流れモード", () => {
-  const time = (page: import("@playwright/test").Page) => page.evaluate(() => (window as unknown as { __player: { time(): number; playing(): boolean } }).__player.time());
-  const playing = (page: import("@playwright/test").Page) => page.evaluate(() => (window as unknown as { __player: { playing(): boolean } }).__player.playing());
-
-  test("初期は流れモード：止まらず・繰り返さずに文を越えて進み、3 文が見える", async ({ page }) => {
-    await login(page);
-    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
-    await expect(page.getByRole("radio", { name: /流れモード/ })).toHaveAttribute("aria-checked", "true");
-    await expect(page.getByRole("button", { name: "反復回数" })).toHaveCount(0);
-    await page.getByRole("button", { name: "再生", exact: true }).click();
-    await expect(page.locator(".now")).toContainText("1 /");
-    // mock sentences are ~6 s long: after 14 s we are in the 3rd sentence and the video never paused
-    const seen = new Set<string>();
-    for (let k = 0; k < 14; k++) {
-      await page.waitForTimeout(1000);
-      expect(await playing(page)).toBe(true);
-      seen.add((await page.locator(".now").textContent())!.match(/(\d+) \//)![1]!);
-    }
-    expect(seen.size).toBeGreaterThanOrEqual(3);
-    await expect(page.locator(".flow-s.before")).toBeVisible();
-    await expect(page.locator(".flow-s.after")).toBeVisible();
-    expect(await page.getByText(/話してみよう/).count()).toBe(0);
-  });
-
-  test("前の文へ・文頭へ・次の文へ・字幕タップのあとも流れ続ける", async ({ page }) => {
-    await login(page);
-    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
-    await page.getByRole("button", { name: "再生", exact: true }).click();
-    await page.waitForTimeout(8000); // into sentence 2
-    await expect(page.locator(".now")).toContainText("2 /");
-    await page.getByRole("button", { name: "前の文へ" }).click();
-    await expect(page.locator(".now")).toContainText("1 /");
-    await page.waitForTimeout(1500);
-    expect(await playing(page)).toBe(true);
+    const bar = page.locator(".controls");
+    await expect(bar.getByRole("button")).toHaveCount(5);
+    for (const name of ["前の文へ", "この文をくり返す", "次の文へ", "再生速度", "詳しい設定"]) await expect(bar.getByRole("button", { name })).toBeVisible();
+    // on a phone: video, previous / current / next sentence and the bar never overlap
     await page.getByRole("button", { name: "次の文へ" }).click();
     await expect(page.locator(".now")).toContainText("2 /");
-    await page.getByRole("button", { name: "今の文の先頭へ" }).click();
-    await page.waitForTimeout(1500);
-    expect(await playing(page)).toBe(true);
-    await page.locator(".flow-s.after").click();
-    await expect(page.locator(".now")).toContainText("3 /");
-    await page.waitForTimeout(7000);
-    expect(await playing(page)).toBe(true);
-    await expect(page.locator(".now")).toContainText("4 /");
-  });
-
-  test("一時停止はその位置から再開し、区間の終わりで止まる", async ({ page }) => {
-    await login(page);
-    await importRange(page, "mockPunct01", "0:00", "0:20", { keepEdges: true });
-    await page.getByRole("button", { name: "再生", exact: true }).click();
-    await page.waitForTimeout(3000);
-    await page.getByRole("button", { name: "停止" }).click();
-    const t = await time(page);
-    await page.waitForTimeout(500);
-    await page.getByRole("button", { name: "再生", exact: true }).click();
-    await page.waitForTimeout(300);
-    const t2 = await time(page);
-    expect(t2).toBeGreaterThanOrEqual(t);
-    expect(t2 - t).toBeLessThan(1000);
-    // run to the end of the 20 s range
-    await expect(page.getByRole("button", { name: "再生", exact: true })).toBeVisible({ timeout: 25_000 });
-    expect(await time(page)).toBeLessThan(23_000);
-  });
-
-  test("一文練習との切り替えで反復の設定が戻り、辞書を開いてもモードは変わらない", async ({ page }) => {
-    await login(page);
-    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
-    await page.getByRole("radio", { name: /一文練習/ }).click();
-    await expect(page.getByRole("button", { name: "反復回数" })).toHaveText("×3");
-    await page.getByRole("button", { name: "反復回数" }).click(); // ×4
-    await page.getByRole("radio", { name: /流れモード/ }).click();
-    await expect(page.getByRole("button", { name: "反復回数" })).toHaveCount(0);
-    await page.reload();
-    await expect(page.getByRole("radio", { name: /流れモード/ })).toHaveAttribute("aria-checked", "true");
-    await page.locator(".now .w").first().click();
-    await page.getByRole("dialog").getByRole("button", { name: "閉じて元の文を再生" }).click();
-    await expect(page.getByRole("radio", { name: /流れモード/ })).toHaveAttribute("aria-checked", "true");
-    await page.waitForTimeout(7000);
-    expect(await playing(page)).toBe(true);
-    await page.getByRole("radio", { name: /一文練習/ }).click();
-    await expect(page.getByRole("button", { name: "反復回数" })).toHaveText("×4");
-  });
-
-  test("教材全体のずらしと文ごとの補正が保存される", async ({ page }) => {
-    await login(page);
-    await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
-    await page.getByRole("button", { name: "時刻の補正" }).click();
-    await page.getByRole("button", { name: "教材全体を0.1 秒遅く" }).click();
-    await page.getByRole("button", { name: "教材全体を0.1 秒遅く" }).click();
-    await expect(page.getByText("教材全体をずらす （+0.2 秒）")).toBeVisible();
-    await page.getByRole("button", { name: /を開始に$/ }).click();
-    await page.waitForTimeout(900);
-    await page.reload();
-    await page.getByRole("button", { name: "時刻の補正" }).click();
-    await expect(page.getByText("教材全体をずらす （+0.2 秒）")).toBeVisible();
-  });
-
-  test("スマホ幅で動画・今の文・前後の文・操作が同時に見える", async ({ page }) => {
-    await login(page);
-    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
-    await page.getByRole("button", { name: "次の文へ" }).click();
-    await expect(page.locator(".now")).toContainText("2 /");
-    await page.getByRole("button", { name: "停止" }).click();
-    const vh = page.viewportSize()!.height;
-    const controlsTop = (await page.locator(".controls").boundingBox())!.y;
+    await togglePlay(page);
+    const controlsTop = (await bar.boundingBox())!.y;
     const videoBottom = ((b) => b.y + b.height)((await page.locator(".video").boundingBox())!);
-    // previous, current and next sentence lie between the video and the control bar: nothing is covered
     for (const loc of [page.locator(".flow-s.before"), page.locator(".now"), page.locator(".flow-s.after")]) {
       const b = (await loc.boundingBox())!;
       expect(b.y).toBeGreaterThanOrEqual(videoBottom - 1);
       expect(b.y + b.height).toBeLessThanOrEqual(controlsTop + 1);
     }
-    expect(controlsTop).toBeLessThan(vh);
+    expect((await bar.boundingBox())!.height).toBeLessThan(80);
+  });
+
+  test("流れモード：止まらず・繰り返さずに文を越えて進む（再生・停止はキー／動画のタップ）", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    await togglePlay(page);
+    const seen = new Set<string>();
+    for (let k = 0; k < 14; k++) {
+      await page.waitForTimeout(1000);
+      expect(await isPlaying(page)).toBe(true);
+      seen.add((await page.locator(".now").textContent())!.match(/(\d+) \//)![1]!);
+    }
+    expect(seen.size).toBeGreaterThanOrEqual(3);
+    expect(await page.getByText(/話してみよう/).count()).toBe(0);
+    // pausing resumes at the same position
+    await togglePlay(page);
+    const t = await playerTime(page);
+    await togglePlay(page);
+    await page.waitForTimeout(200);
+    const t2 = await playerTime(page);
+    expect(t2).toBeGreaterThanOrEqual(t);
+    expect(t2 - t).toBeLessThan(800);
+  });
+
+  test("動画側（YouTube の操作）で止めたり再生したりしても、アプリが合わせる", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    // the fake player plays / pauses by itself, like a tap on the YouTube video
+    await page.evaluate(() => (window as unknown as { __player: { play(): void } }).__player.play());
+    await page.waitForTimeout(7000);
+    await expect(page.locator(".now")).toContainText("2 /"); // the highlight followed
+    await page.evaluate(() => (window as unknown as { __player: { pause(): void } }).__player.pause());
+    await togglePlay(page); // the app knows it is paused, so this plays again
+    await page.waitForTimeout(300);
+    expect(await isPlaying(page)).toBe(true);
+  });
+
+  test("🔁 で今の文だけを止めずにくり返し、解除するとそのまま進む", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    await togglePlay(page);
+    await page.waitForTimeout(1500);
+    await page.getByRole("button", { name: "この文をくり返す" }).click();
+    await expect(page.getByRole("button", { name: "この文をくり返す" })).toHaveAttribute("aria-pressed", "true");
+    await page.waitForTimeout(13_000); // two passes of a ~6 s sentence
+    await expect(page.locator(".now")).toContainText("1 /");
+    expect(await isPlaying(page)).toBe(true);
+    await page.getByRole("button", { name: "この文をくり返す" }).click();
+    await page.waitForTimeout(7000);
+    await expect(page.locator(".now")).toContainText("2 /");
+  });
+
+  test("字幕の右半分を 2 回タップで +N 秒、左半分で −N 秒（秒数は ⚙ で変えられる）", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    await togglePlay(page);
+    await page.waitForTimeout(1000);
+    const area = page.locator(".gesture");
+    const box = (await area.boundingBox())!;
+    const t0 = await playerTime(page);
+    await area.dblclick({ position: { x: box.width * 0.85, y: 10 } });
+    await expect(page.locator(".seek-bubble")).toHaveText("+5秒");
+    const t1 = await playerTime(page);
+    expect(t1 - t0).toBeGreaterThan(4500);
+    const sheet = await openSettings(page);
+    await sheet.getByRole("button", { name: "3 秒" }).click();
+    await closeSettings(page);
+    const t2 = await playerTime(page);
+    await area.dblclick({ position: { x: box.width * 0.15, y: 10 } });
+    const t3 = await playerTime(page);
+    expect(t2 - t3).toBeGreaterThan(2500);
+    expect(t2 - t3).toBeLessThan(3600);
+    expect(await isPlaying(page)).toBe(true);
+    // a single tap on a word still opens the dictionary
+    await page.locator(".now .w").first().click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("dialog")).toContainText("動画での発言", { timeout: 15_000 });
+  });
+
+  test("前の文へ・次の文へ・字幕タップのあとも流れ続ける", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    await togglePlay(page);
+    await page.waitForTimeout(8000);
+    await expect(page.locator(".now")).toContainText("2 /");
+    await page.getByRole("button", { name: "前の文へ" }).click();
+    await expect(page.locator(".now")).toContainText("1 /");
+    await page.waitForTimeout(1200);
+    expect(await isPlaying(page)).toBe(true);
+    await page.getByRole("button", { name: "次の文へ" }).click();
+    await expect(page.locator(".now")).toContainText("2 /");
+    await page.locator(".flow-s.after").click();
+    await expect(page.locator(".now")).toContainText("3 /");
+    await page.waitForTimeout(1000);
+    expect(await isPlaying(page)).toBe(true);
+  });
+
+  test("⚙ から一文練習へ：反復と待ち時間が使え、戻すと流れモード", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
+    let sheet = await openSettings(page);
+    await sheet.getByRole("tab", { name: /区切ってまねる/ }).click();
+    await expect(sheet.getByRole("radio", { name: /一文練習/ })).toHaveAttribute("aria-checked", "true");
+    await sheet.getByRole("button", { name: "一文", exact: true }).click();
+    await sheet.getByRole("button", { name: "2", exact: true }).first().click();
+    await sheet.getByRole("button", { name: "なし", exact: true }).first().click();
+    await closeSettings(page);
+    await expect(page.getByRole("button", { name: "この文をもう一度" })).toBeVisible();
+    await togglePlay(page);
+    await expect(page.locator(".now")).toContainText("2 /", { timeout: 20_000 }); // after 2 plays it moves on
+    sheet = await openSettings(page);
+    await sheet.getByRole("radio", { name: /流れモード/ }).click();
+    await closeSettings(page);
+    await expect(page.getByRole("button", { name: "この文をくり返す" })).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("button", { name: "この文をくり返す" })).toBeVisible();
+  });
+
+  test("一文練習：文末で止まり、話す時間のあと反復（テスト用プレイヤー）", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
+    const sheet = await openSettings(page);
+    await sheet.getByRole("tab", { name: /区切ってまねる/ }).click();
+    await sheet.getByRole("button", { name: "一文", exact: true }).click();
+    await closeSettings(page);
+    await togglePlay(page);
+    await expect(page.getByText(/話してみよう/)).toBeVisible({ timeout: 10_000 });
+    await page.getByRole("button", { name: "飛ばす" }).click();
+    await page.waitForTimeout(300);
+    expect(await isPlaying(page)).toBe(true);
+  });
+
+  test("字幕・訳・速度の設定と位置が保存される", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    await page.getByRole("button", { name: "次の文へ" }).click();
+    await page.getByRole("button", { name: "次の文へ" }).click();
+    await expect(page.locator(".now")).toContainText("3 /");
+    await page.getByRole("button", { name: "再生速度" }).click();
+    await expect(page.getByRole("button", { name: "再生速度" })).toHaveText("1.25x");
+    const sheet = await openSettings(page);
+    await sheet.getByRole("button", { name: "訳", exact: true }).click();
+    await sheet.getByRole("button", { name: "英語字幕" }).click();
+    await closeSettings(page);
+    await expect(page.locator(".now .ja")).toHaveCount(0);
+    await expect(page.locator(".now .en")).toHaveClass(/hidden-text/);
+    await page.waitForTimeout(900);
+    await page.reload();
+    await expect(page.locator(".now")).toContainText("3 /");
+    await expect(page.getByRole("button", { name: "再生速度" })).toHaveText("1.25x");
+    await expect(page.locator(".now .en")).toHaveClass(/hidden-text/);
+  });
+
+  test("A–B のくり返しは ⚙ から：解除するとそこから流れる", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
+    await togglePlay(page);
+    let sheet = await openSettings(page);
+    await sheet.getByRole("button", { name: "A–B ループ" }).click();
+    await closeSettings(page);
+    await page.waitForTimeout(1500);
+    sheet = await openSettings(page);
+    await sheet.getByRole("button", { name: "A–B ループ" }).click();
+    await closeSettings(page);
+    await expect(page.getByText("A–B をくり返し中")).toBeVisible();
+    await page.waitForTimeout(2500);
+    expect(await playerTime(page)).toBeLessThan(5000);
+    await page.locator(".controls").getByRole("button", { name: "解除" }).click();
+    const tc = await playerTime(page);
+    await page.waitForTimeout(3000);
+    expect((await playerTime(page)) - tc).toBeGreaterThan(2500); // kept flowing forward, no jump back
+    await expect(page.getByText("A–B をくり返し中")).toHaveCount(0);
+  });
+
+  test("教材全体のずらしと文ごとの補正が保存される", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
+    let sheet = await openSettings(page);
+    await sheet.getByRole("button", { name: "時刻の補正（ずれるとき）" }).click();
+    await page.getByRole("button", { name: "教材全体を0.1 秒遅く" }).click();
+    await page.getByRole("button", { name: "教材全体を0.1 秒遅く" }).click();
+    await expect(page.getByText("教材全体をずらす （+0.2 秒）")).toBeVisible();
+    await page.waitForTimeout(900);
+    await page.reload();
+    sheet = await openSettings(page);
+    await sheet.getByRole("button", { name: "時刻の補正（ずれるとき）" }).click();
+    await expect(page.getByText("教材全体をずらす （+0.2 秒）")).toBeVisible();
   });
 });
 
@@ -458,7 +467,7 @@ test.describe("見本・ホーム", () => {
     await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
     const v = (await page.locator(".video").boundingBox())!;
     expect(v.width).toBeLessThanOrEqual(720);
-    await expect(page.getByRole("button", { name: "再生", exact: true })).toBeInViewport();
+    await expect(page.getByRole("button", { name: "次の文へ" })).toBeInViewport();
   });
 });
 

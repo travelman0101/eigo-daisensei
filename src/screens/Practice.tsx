@@ -41,6 +41,11 @@ export function Practice({ id }: { id: string }) {
   const [reveal, setReveal] = useState(false);
   const [ab, setAb] = useState<{ a: number | null }>({ a: null });
   const [tapHint, setTapHint] = useState(false);
+  const [bubble, setBubble] = useState<{ side: "l" | "r"; text: string; at: number } | null>(null);
+  const lastTap = useRef<{ at: number; side: "l" | "r" } | null>(null);
+  const tapTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const bypass = useRef(false);
+  const navTarget = useRef<{ i: number; at: number } | null>(null);
   // the list view follows the playing sentence until the learner scrolls it by hand
   const [follow, setFollow] = useState(true);
   const holder = useRef<HTMLDivElement>(null);
@@ -111,6 +116,7 @@ export function Practice({ id }: { id: string }) {
       if (e.type === "ready") setReady(true);
       if (e.type === "error") setPlayerError(e.message);
       if (e.type === "state" && e.playing) setTapHint(false);
+      if (e.type === "state" && (e.state === 1 || e.state === 2 || e.state === 0)) engine.current?.external(e.state === 1);
     })
       .then((p) => {
         if (!alive) return p.destroy();
@@ -206,6 +212,22 @@ export function Practice({ id }: { id: string }) {
     });
   };
 
+  // keyboard: Space plays / pauses, ← / → move by the double-tap seconds
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      const secs = (settings?.seekSeconds ?? 5) * 1000;
+      if (e.key === " ") {
+        e.preventDefault();
+        engine.current?.toggle();
+      } else if (e.key === "ArrowLeft") engine.current?.seekBy(-secs);
+      else if (e.key === "ArrowRight") engine.current?.seekBy(secs);
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, [settings?.seekSeconds]);
+
   const firstPlay = (fn: () => void) => {
     fn();
     // mobile browsers may block the first programmatic play: ask for one tap on the video itself
@@ -245,8 +267,49 @@ export function Practice({ id }: { id: string }) {
   // in flow, "previous / this / next" mean relative to the sentence on screen (what the learner sees)
   const moveBy = (d: -1 | 0 | 1) => {
     if (!flow) return firstPlay(() => (d < 0 ? engine.current?.prev() : d > 0 ? engine.current?.next() : engine.current?.restart()));
-    const target = Math.max(0, Math.min(m.sentences.length - 1, sIdx + d));
+    // quick repeated taps add up even before the screen has caught up with the previous one
+    const recent = navTarget.current && performance.now() - navTarget.current.at < 1200 ? navTarget.current.i : sIdx;
+    const target = Math.max(0, Math.min(m.sentences.length - 1, recent + d));
+    navTarget.current = { i: target, at: performance.now() };
     playSentence(target);
+  };
+
+  /**
+   * Taps on the subtitle area: a double tap on the left / right half moves −/+ N seconds. A single tap
+   * keeps its normal meaning (jump to a sentence, open a word) after a short wait for a second tap.
+   */
+  const onSubtitleTap = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (bypass.current) {
+      bypass.current = false;
+      return;
+    }
+    const box = e.currentTarget.getBoundingClientRect();
+    const side: "l" | "r" = e.clientX < box.left + box.width / 2 ? "l" : "r";
+    const now = performance.now();
+    e.stopPropagation();
+    e.preventDefault();
+    if (lastTap.current && now - lastTap.current.at < 300 && lastTap.current.side === side) {
+      clearTimeout(tapTimer.current);
+      lastTap.current = null;
+      const ms = settings.seekSeconds * 1000 * (side === "l" ? -1 : 1);
+      engine.current?.seekBy(ms);
+      setBubble({ side, text: `${side === "l" ? "−" : "+"}${settings.seekSeconds}秒`, at: now });
+      return;
+    }
+    lastTap.current = { at: now, side };
+    const target = e.target as HTMLElement;
+    // remember what was tapped: during playback the sentence may change (and the element be replaced) before the wait ends
+    const word = target.closest<HTMLElement>("[data-wi]");
+    const card = target.closest<HTMLElement>("[data-i]");
+    clearTimeout(tapTimer.current);
+    tapTimer.current = setTimeout(() => {
+      lastTap.current = null;
+      if (target.isConnected) {
+        bypass.current = true;
+        target.click();
+      } else if (word) tapWord(Number(word.dataset.si), Number(word.dataset.wi));
+      else if (card) playSentence(Number(card.dataset.i));
+    }, 300);
   };
 
   const tapWord = (si: number, wi: number) => {
@@ -279,6 +342,8 @@ export function Practice({ id }: { id: string }) {
               {showSep && <span className="sep">/</span>}
               <span
                 className={`w ${cls} ${sel ? "sel" : ""}`}
+                data-si={si}
+                data-wi={wi}
                 role="button"
                 tabIndex={0}
                 onClick={(e) => {
@@ -297,7 +362,7 @@ export function Practice({ id }: { id: string }) {
   };
 
   return (
-    <main style={{ paddingBottom: 150 }}>
+    <main style={{ paddingBottom: 96 }}>
       <div className="practice-top">
         <div className="row between" style={{ marginBottom: 6 }}>
           <button className="btn sm ghost" onClick={() => navigate(m.sample ? "/" : "/library")}>
@@ -315,33 +380,10 @@ export function Practice({ id }: { id: string }) {
       {playerError && <div className="flash error" style={{ marginBottom: 10 }}>{playerError}　字幕と単語テストは引き続き使えます。</div>}
       {tapHint && <div className="flash warn small">スマホでは最初の 1 回だけ、動画の上の再生ボタンを直接タップしてください（ブラウザの自動再生の制限）</div>}
 
-      <div className="seg" role="radiogroup" aria-label="再生のしかた">
-        <button role="radio" aria-checked={flow} className={flow ? "on" : ""} onClick={() => updateSettings({ practice: "flow", step: settings.step === 2 || settings.step === 3 ? 4 : settings.step })}>
-          流れモード<small>止めずに進む</small>
-        </button>
-        <button role="radio" aria-checked={!flow} className={!flow ? "on" : ""} onClick={() => updateSettings({ practice: "single", step: settings.step === 2 || settings.step === 3 ? settings.step : 3 })}>
-          一文練習<small>止めて反復</small>
-        </button>
-      </div>
-      <div className="steps" role="tablist" aria-label="練習の流れ">
-        {STEPS.map((x) => (
-          <button key={x.n} role="tab" aria-selected={settings.step === x.n} className={`step ${settings.step === x.n ? "on" : ""}`} onClick={() => updateSettings({ ...x.preset, step: x.n })}>
-            <b>{x.n}</b>
-            {x.name}
-          </button>
-        ))}
-      </div>
-      {step && !flow && <p className="small muted one-line" style={{ margin: "0 4px 8px" }}>{step.hint}</p>}
 
 
-      {m.sample && (
-        <div className="small muted" style={{ margin: "0 4px 10px" }}>
-          <span className="badge">{m.sample.level} の目安</span> {m.sample.reason}
-          <br />
-          出典: <a href={m.sample.sourceUrl} target="_blank" rel="noreferrer">{m.sample.credit}</a>（{m.sample.license}）。レベルは目安で、公式の判定ではありません。
-        </div>
-      )}
 
+      <div className="gesture" onClickCapture={onSubtitleTap}>
       {settings.view === "current" && flow ? (
         <div className="flow-view" aria-live="off">
           {[sIdx - 1, sIdx, sIdx + 1].map((i) => {
@@ -421,27 +463,20 @@ export function Practice({ id }: { id: string }) {
         </button>
       )}
 
-      <div className="row wrap" style={{ margin: "12px 0", gap: 6 }}>
-        <button className={`chip ${settings.view === "list" ? "on" : ""}`} onClick={() => (updateSettings({ view: settings.view === "list" ? "current" : "list" }), setFollow(true))}>
-          全文の一覧
-        </button>
-        <button className={`chip ${settings.showEn ? "on" : ""}`} aria-pressed={settings.showEn} onClick={() => updateSettings({ showEn: !settings.showEn })}>
-          英語字幕
-        </button>
-        <button className={`chip ${settings.showJa ? "on" : ""}`} aria-pressed={settings.showJa} onClick={() => updateSettings({ showJa: !settings.showJa })}>
-          訳
-        </button>
-        <button className={`chip ${panel === "timing" ? "on" : ""}`} onClick={() => setPanel(panel === "timing" ? "none" : "timing")}>
-          時刻の補正
-        </button>
       </div>
-      <div style={{ margin: "0 0 12px" }}>
-        <Recorder sentenceId={s.id} onPlayOriginal={() => engine.current?.playUnit(units.findIndex((u) => u.sentence === sIdx))} />
-      </div>
+      <p className="small muted tap-hint" aria-hidden>
+        ← 2回タップで −{settings.seekSeconds}秒 ｜ +{settings.seekSeconds}秒 2回タップ →
+      </p>
+      {bubble && performance.now() - bubble.at < 700 && <div className={`seek-bubble ${bubble.side}`}>{bubble.text}</div>}
+      {m.sample && (
+        <p className="small muted" style={{ margin: "4px 4px 0" }}>
+          <span className="badge">{m.sample.level} の目安</span> 出典: <a href={m.sample.sourceUrl} target="_blank" rel="noreferrer">{m.sample.credit}</a>（{m.sample.license}）
+        </p>
+      )}
 
       {tip && (
         <div className="flash card small">
-          おすすめの流れ: ① 聞く → ② 意味を確認 → ③ 区切ってまねる → ④ 追いかけて話す → ⑤ 字幕なし。どこからでも始められ、設定は自動で保存されます。単語をタップすると意味が出ます。
+          動画をタップすると再生／停止。字幕の左半分を 2 回タップで戻る、右半分で進む。🔁 で今の文をくり返します。単語をタップすると意味が出ます。練習の段階・一文練習・録音などは ⚙ にあります。
           <div style={{ marginTop: 6 }}>
             <button className="btn sm" onClick={() => (setTip(false), void setKv("seenPracticeTip", true))}>
               わかった
@@ -506,66 +541,17 @@ export function Practice({ id }: { id: string }) {
 
       {createPortal(
         <>
-      <div className="controls glass">
-        <div className="chips" style={{ justifyContent: "center", marginBottom: 8 }}>
-          {flow && (
-            <button className="chip" onClick={() => firstPlay(() => engine.current?.toStart())} disabled={!ready}>
-              ⇤ 区間の先頭へ
+      <div className="controls glass slim">
+        {es?.ab && (
+          <div className="row small" style={{ justifyContent: "center", marginBottom: 6 }}>
+            <span className="muted">A–B をくり返し中</span>
+            <button className="btn sm ghost" onClick={() => (engine.current?.clearAB(), setAb({ a: null }))}>
+              解除
             </button>
-          )}
-          {!flow && (["chunk", "sentence", "multi"] as const).map((u) => (
-            <button key={u} className={`chip ${settings.unit === u ? "on" : ""}`} onClick={() => updateSettings({ unit: u })}>
-              {u === "chunk" ? "まとまり" : u === "sentence" ? "一文" : `${settings.multiCount}文`}
-            </button>
-          ))}
-          <button className="chip" onClick={() => updateSettings({ rate: RATES[(RATES.indexOf(settings.rate) + 1) % RATES.length]! })} aria-label="再生速度">
-            {settings.rate}x
-          </button>
-          {!flow && (
-            <button className="chip" onClick={() => updateSettings({ repeats: settings.repeats >= 5 ? (settings.repeats === 0 ? 1 : 0) : settings.repeats + 1 })} aria-label="反復回数">
-              ×{settings.repeats === 0 ? "∞" : settings.repeats}
-            </button>
-          )}
-          <button className="chip" onClick={() => setPanel(panel === "settings" ? "none" : "settings")} aria-label="詳しい設定">
-            ⚙
-          </button>
-        </div>
-        <div className="main">
-          <button className="icon-btn" aria-label="前の文へ" onClick={() => moveBy(-1)} disabled={!ready}>
-            ⏮
-          </button>
-          <button className="icon-btn" aria-label="今の文の先頭へ" onClick={() => moveBy(0)} disabled={!ready}>
-            ↺
-          </button>
-          <button className="icon-btn big" aria-label={playing ? "停止" : "再生"} onClick={() => firstPlay(() => (es?.phase === "gap" ? engine.current?.pause() : engine.current?.toggle()))} disabled={!ready}>
-            {playing || es?.phase === "gap" ? "⏸" : "▶"}
-          </button>
-          <button className="icon-btn" aria-label="次の文へ" onClick={() => moveBy(1)} disabled={!ready}>
-            ⏭
-          </button>
-          <button
-            className={`icon-btn ${es?.ab ? "on" : ""}`}
-            aria-label="A–B ループ"
-            onClick={() => {
-              if (es?.ab) {
-                engine.current?.clearAB();
-                setAb({ a: null });
-              } else if (ab.a == null) {
-                setAb({ a: t });
-                toast("A を記録しました。終わりの位置でもう一度押してください");
-              } else {
-                engine.current?.setAB(Math.min(ab.a, t), Math.max(ab.a, t));
-                setAb({ a: null });
-              }
-            }}
-            disabled={!ready}
-          >
-            {es?.ab ? "AB✓" : ab.a != null ? "B?" : "AB"}
-          </button>
-        </div>
-        {es?.ab && <div className="small muted" style={{ textAlign: "center", marginTop: 4 }}>A–B ループ中（AB✓ で解除すると、そこから{flow ? "流れて進みます" : "元の練習に戻ります"}）</div>}
+          </div>
+        )}
         {es?.phase === "gap" && (
-          <div className="row" style={{ marginTop: 6 }}>
+          <div className="row" style={{ marginBottom: 6 }}>
             <div className="gapbar grow" aria-label="待ち時間">
               <div style={{ width: `${Math.max(0, 100 - (gapLeft / Math.max(1, es.gapMs)) * 100)}%` }} />
             </div>
@@ -575,13 +561,29 @@ export function Practice({ id }: { id: string }) {
             </button>
           </div>
         )}
-        {!flow && settings.repeats > 1 && es && es.phase !== "idle" && (
-          <div className="progress-dots" aria-label={`${es.rep + 1} 回目`}>
-            {Array.from({ length: settings.repeats }, (_, i) => (
-              <i key={i} className={i <= es.rep ? "on" : ""} />
-            ))}
-          </div>
-        )}
+        <div className="main">
+          <button className="icon-btn" aria-label="前の文へ" onClick={() => moveBy(-1)} disabled={!ready}>
+            ⏮
+          </button>
+          {flow ? (
+            <button className={`pill ${es?.loop ? "on" : ""}`} aria-pressed={!!es?.loop} aria-label="この文をくり返す" onClick={() => engine.current?.setLoop(!es?.loop)} disabled={!ready}>
+              🔁 {es?.loop ? "くり返し中" : "くり返す"}
+            </button>
+          ) : (
+            <button className="pill" aria-label="この文をもう一度" onClick={() => moveBy(0)} disabled={!ready}>
+              ↺ もう一度{settings.repeats > 1 && es && es.phase !== "idle" ? ` ${es.rep + 1}/${settings.repeats}` : ""}
+            </button>
+          )}
+          <button className="icon-btn" aria-label="次の文へ" onClick={() => moveBy(1)} disabled={!ready}>
+            ⏭
+          </button>
+          <button className="icon-btn speed" onClick={() => updateSettings({ rate: RATES[(RATES.indexOf(settings.rate) + 1) % RATES.length]! })} aria-label="再生速度">
+            {settings.rate}x
+          </button>
+          <button className="icon-btn" onClick={() => setPanel(panel === "settings" ? "none" : "settings")} aria-label="詳しい設定">
+            ⚙
+          </button>
+        </div>
       </div>
 
       <AnimatePresence>
@@ -590,14 +592,69 @@ export function Practice({ id }: { id: string }) {
             <motion.div className="backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setPanel("none")} />
             <motion.div className="sheet" role="dialog" aria-label="練習の設定" initial={{ y: "100%", x: "-50%" }} animate={{ y: 0, x: "-50%" }} exit={{ y: "100%", x: "-50%" }} transition={{ type: "spring", damping: 30, stiffness: 320 }}>
               <div className="grab" />
+              <h2>表示</h2>
+              <div className="chips wrap" style={{ flexWrap: "wrap", marginBottom: 14 }}>
+                <button className={`chip ${settings.showEn ? "on" : ""}`} aria-pressed={settings.showEn} onClick={() => updateSettings({ showEn: !settings.showEn })}>
+                  英語字幕
+                </button>
+                <button className={`chip ${settings.showJa ? "on" : ""}`} aria-pressed={settings.showJa} onClick={() => updateSettings({ showJa: !settings.showJa })}>
+                  訳
+                </button>
+                <button className={`chip ${settings.view === "list" ? "on" : ""}`} aria-pressed={settings.view === "list"} onClick={() => (updateSettings({ view: settings.view === "list" ? "current" : "list" }), setFollow(true))}>
+                  全文の一覧
+                </button>
+              </div>
+              <h2>練習の段階</h2>
+              <div className="seg" role="radiogroup" aria-label="再生のしかた">
+        <button role="radio" aria-checked={flow} className={flow ? "on" : ""} onClick={() => updateSettings({ practice: "flow", step: settings.step === 2 || settings.step === 3 ? 4 : settings.step })}>
+          流れモード<small>止めずに進む</small>
+        </button>
+        <button role="radio" aria-checked={!flow} className={!flow ? "on" : ""} onClick={() => updateSettings({ practice: "single", step: settings.step === 2 || settings.step === 3 ? settings.step : 3 })}>
+          一文練習<small>止めて反復</small>
+        </button>
+      </div>
+      <div className="steps" role="tablist" aria-label="練習の流れ">
+        {STEPS.map((x) => (
+          <button key={x.n} role="tab" aria-selected={settings.step === x.n} className={`step ${settings.step === x.n ? "on" : ""}`} onClick={() => updateSettings({ ...x.preset, step: x.n })}>
+            <b>{x.n}</b>
+            {x.name}
+          </button>
+        ))}
+      </div>
+              {step && <p className="small muted" style={{ margin: "0 4px 12px" }}>{step.hint}</p>}
+              <h2>くり返す・録音・時刻</h2>
+              <div className="stack" style={{ marginBottom: 14 }}>
+                <button
+                  className={`btn ${es?.ab ? "primary" : ""}`}
+                  style={{ width: "100%" }}
+                  aria-label="A–B ループ"
+                  onClick={() => {
+                    if (es?.ab) {
+                      engine.current?.clearAB();
+                      setAb({ a: null });
+                    } else if (ab.a == null) {
+                      setAb({ a: t });
+                      toast("A を記録しました。終わりの位置でもう一度押してください");
+                    } else {
+                      engine.current?.setAB(Math.min(ab.a, t), Math.max(ab.a, t));
+                      setAb({ a: null });
+                    }
+                  }}
+                  disabled={!ready}
+                >
+                  {es?.ab ? "A–B のくり返しを解除" : ab.a != null ? `B（終わり）を今の位置 ${formatTime(t, true)} に` : `好きな範囲をくり返す：A（始め）を今の位置 ${formatTime(t, true)} に`}
+                </button>
+                <Recorder sentenceId={s.id} onPlayOriginal={() => engine.current?.playUnit(units.findIndex((u) => u.sentence === sIdx))} />
+                <button className="btn" style={{ width: "100%" }} onClick={() => (setPanel("timing"))}>
+                  時刻の補正（ずれるとき）
+                </button>
+              </div>
               <PracticeSettings settings={settings} update={updateSettings} flow={flow} />
               <div className="stack" style={{ marginTop: 14 }}>
-                <button className="btn" style={{ width: "100%" }} onClick={() => (setPanel("none"), firstPlay(() => engine.current?.playRange(0)))}>
-                  ▶ 取り込んだ区間を最初から通して再生
+                <button className="btn" style={{ width: "100%" }} onClick={() => (setPanel("none"), firstPlay(() => engine.current?.toStart()))}>
+                  ⇤ 区間の最初から再生
                 </button>
-                <button className="btn" style={{ width: "100%" }} onClick={() => (setPanel("none"), firstPlay(() => engine.current?.playRange(es?.unit ?? 0)))}>
-                  ▶ 今の文から最後まで通して再生
-                </button>
+                {m.sample && <p className="small muted">{m.sample.level} の目安: {m.sample.reason}（公式の判定ではありません）</p>}
                 <p className="small muted">
                   区間 {formatTime(m.start)}–{formatTime(m.end)}・{m.sentences.length} 文・解析版 v{m.analysisVersion}
                   {m.punctuatedByAi ? "・句読点は AI が補完（単語は元の字幕のまま）" : ""}
@@ -652,10 +709,9 @@ function PracticeSettings({ settings, update, flow }: { settings: Settings; upda
       <p className="small muted" style={{ marginTop: -4 }}>
         初期値は開発者の提案です（最適値の保証ではありません）。変更は自動で保存されます。
       </p>
-      <Seg label="再生のしかた" value={settings.practice} options={[["flow", "流れモード（止めずに進む）"], ["single", "一文練習（止めて反復）"]]} onChange={(practice) => update({ practice })} />
       {flow ? (
         <p className="small muted" style={{ margin: "-4px 0 12px" }}>
-          流れモードでは文末で止まらず、反復・待ち時間も使いません。一文練習に戻すと、下の一文練習の設定がそのまま使われます。
+          流れモードでは文末で止まらず、反復・待ち時間も使いません。区切りや反復回数は、上の「練習の段階」で一文練習にすると設定できます。
         </p>
       ) : (
         <>
@@ -670,6 +726,7 @@ function PracticeSettings({ settings, update, flow }: { settings: Settings; upda
           <Seg label="時刻が推定の文の端に足す余白" value={settings.estMargin} options={[[0, "なし"], [200, "0.2 秒"], [400, "0.4 秒"]]} onChange={(estMargin) => update({ estMargin })} />
         </>
       )}
+      <Seg label="字幕を 2 回タップで戻る・進む秒数" value={settings.seekSeconds} options={[[3, "3 秒"], [5, "5 秒"], [10, "10 秒"]]} onChange={(seekSeconds) => update({ seekSeconds })} />
       <Seg label="再生速度" value={settings.rate} options={RATES.map((r) => [r, `${r}x`] as [number, string])} onChange={(rate) => update({ rate })} />
       <Seg label="字幕の表示を遅らせる（Bluetooth イヤホンで音が遅れて聞こえるとき）" value={settings.displayDelay} options={[[0, "なし"], [150, "0.15 秒"], [250, "0.25 秒"], [400, "0.4 秒"]]} onChange={(displayDelay) => update({ displayDelay })} />
       <Seg label="前後の余白（語頭・語尾が切れるとき）" value={`${settings.padPre}/${settings.padPost}`} options={[["0/0", "なし"], ["150/250", "標準"], ["300/500", "多め"]]} onChange={(v) => {

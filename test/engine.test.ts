@@ -217,6 +217,74 @@ describe("flow mode", () => {
   });
 });
 
+describe("sentence loop, ±N seconds and the YouTube player's own controls", () => {
+  it("🔁 repeats the sentence being heard without pausing; off continues the flow", () => {
+    const r = rig();
+    r.engine.setFlow(true);
+    r.engine.playUnit(0);
+    r.advance(1200); // t = 2200, sentence 1 (2000–3500)
+    r.engine.setLoop(true);
+    r.advance(3000);
+    expect(r.engine.state).toMatchObject({ unit: 1, loop: true, phase: "playing" });
+    expect(r.log.filter((l) => l === "seek@2000").length).toBeGreaterThanOrEqual(2);
+    expect(r.log.filter((l) => l.startsWith("pause"))).toEqual([]);
+    r.engine.setLoop(false);
+    r.advance(3000);
+    expect(r.engine.state.unit).toBe(2); // flowed on into the next sentence
+  });
+
+  it("next / previous while looping move the loop", () => {
+    const r = rig();
+    r.engine.setFlow(true);
+    r.engine.playUnit(1);
+    r.engine.setLoop(true);
+    r.engine.next();
+    r.advance(1100);
+    expect(r.engine.state).toMatchObject({ unit: 2, loop: true });
+    expect(r.log.filter((l) => l === "seek@5000").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("releasing A–B right before its end never stops the flow", () => {
+    const r = rig();
+    r.engine.setFlow(true);
+    r.engine.setAB(1200, 1700);
+    r.advance(400); // t = 1600: within 250 ms of B, the stop timer is scheduled
+    r.engine.clearAB();
+    r.advance(1000);
+    expect(r.engine.state.phase).toBe("playing");
+    expect(r.log.filter((l) => l.startsWith("pause"))).toEqual([]);
+  });
+
+  it("seekBy jumps inside the range and keeps playing", () => {
+    const r = rig();
+    r.engine.setFlow(true);
+    r.engine.playUnit(2);
+    r.advance(500); // 5500
+    r.engine.seekBy(-5000);
+    expect(r.log.at(-1)).toBe("seek@1000"); // clamped to the range start
+    r.engine.seekBy(10_000);
+    expect(r.log.at(-1)).toBe("seek@6000"); // clamped to the range end
+    expect(r.engine.state.phase).toBe("playing");
+  });
+
+  it("follows play / pause done on the YouTube player itself", () => {
+    const r = rig();
+    r.engine.setFlow(true);
+    r.engine.external(true);
+    expect(r.engine.state).toMatchObject({ phase: "playing", continuous: true });
+    r.engine.external(false);
+    expect(r.engine.state.phase).toBe("idle");
+    // during a repetition wait, playing on the video means "again now"
+    const g = rig({ gapMode: "fixed", gapFixed: 3 });
+    g.engine.playUnit(0);
+    g.advance(1000);
+    expect(g.engine.state.phase).toBe("gap");
+    g.engine.external(true);
+    expect(g.engine.state.phase).toBe("playing");
+    expect(g.log.at(-2)).toBe("seek@1000");
+  });
+});
+
 describe("buildUnits", () => {
   const sents = [
     { start: 0, end: 3000, words: [0, 1, 2, 3].map((k) => ({ start: k * 750, end: (k + 1) * 750 })), chunks: [0, 2] },
