@@ -78,3 +78,21 @@ export const isPlaying = (page: Page) => page.evaluate(() => (window as unknown 
 export async function togglePlay(page: Page) {
   await page.locator("body").press(" ");
 }
+
+/** A sideways swipe on the subtitles: "left" goes ahead, "right" goes back. */
+export async function swipe(page: Page, dir: "left" | "right") {
+  const b = (await page.locator(".gesture").boundingBox())!;
+  const y = b.y + Math.min(40, b.height / 2);
+  const [x0, x1] = dir === "left" ? [b.x + b.width * 0.8, b.x + b.width * 0.2] : [b.x + b.width * 0.2, b.x + b.width * 0.8];
+  await page.mouse.move(x0, y);
+  await page.mouse.down();
+  await page.mouse.move((x0 + x1) / 2, y, { steps: 3 });
+  await page.mouse.move(x1, y, { steps: 3 });
+  await page.mouse.up();
+}
+/** Pick a word of the current sentence and open its meaning (the dictionary opens only when asked). */
+export async function openMeaning(page: Page, nth = 0) {
+  await page.locator(".now .w").nth(nth).click();
+  await page.getByRole("button", { name: "意味を調べる" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+}

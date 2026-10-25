@@ -298,6 +298,39 @@ describe("sentence loop, ±N seconds and the YouTube player's own controls", () 
     expect(r.engine.state.phase).toBe("playing");
   });
 
+  it("🔁 is switched off when one-sentence practice takes over (its own repeats and wait apply again)", () => {
+    const r = rig({ repeats: 2, gapMode: "fixed", gapFixed: 1 });
+    r.engine.setFlow(true);
+    r.engine.playUnit(0);
+    r.engine.setLoop(true);
+    expect(r.engine.state.loop).toBe(true);
+    r.engine.setFlow(false);
+    expect(r.engine.state.loop).toBe(false);
+    r.engine.playUnit(0);
+    r.advance(1000); // end of the sentence: a wait, not a seamless loop
+    expect(r.engine.state).toMatchObject({ phase: "gap", rep: 1 });
+  });
+
+  it("a saved loop is restored waiting at A; its edges can be fine-tuned while it runs", () => {
+    const r = rig();
+    r.engine.setFlow(true);
+    r.engine.setAB(2000, 3000, false);
+    expect(r.engine.state).toMatchObject({ phase: "idle", ab: { a: 2000, b: 3000 } });
+    expect(r.log).toEqual([]); // nothing moves: the player was opened at A
+    r.engine.seekBy(2000); // (the player opened there)
+    r.engine.toggle();
+    r.advance(1100);
+    expect(r.t).toBeLessThan(3000); // looped back
+    r.engine.adjustAB(1900, 3000); // a new start is heard at once
+    expect(r.log.at(-1)).toBe("seek@1900");
+    const n = r.log.length;
+    r.engine.adjustAB(1900, 3200); // a new end applies on the next pass, without a jump
+    expect(r.log.length).toBe(n);
+    expect(r.engine.state.ab).toEqual({ a: 1900, b: 3200 });
+    r.engine.adjustAB(1900, 2000); // too short: ignored
+    expect(r.engine.state.ab).toEqual({ a: 1900, b: 3200 });
+  });
+
   it("follows play / pause done on the YouTube player itself", () => {
     const r = rig();
     r.engine.setFlow(true);

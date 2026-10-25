@@ -14,6 +14,10 @@ export interface Progress {
   adjust: Record<string, { s: number; e: number }>;
   /** shift applied to every sentence of this material (same delay everywhere), ms */
   offset?: number;
+  /** where playback was (ms), so a long sentence resumes in the middle */
+  pos?: number;
+  /** the repeated part (a picked phrase or an A–B from the settings), with its fine-tuned edges */
+  loop?: { a: number; b: number; sentenceId?: string; from?: number; to?: number };
   plays: number;
   lastAt: number;
   updatedAt: number;

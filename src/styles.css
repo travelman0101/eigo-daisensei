@@ -929,3 +929,13 @@ table.usage th:first-child {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* subtitles: vertical scrolling stays with the browser, sideways moves are swipes */
+.gesture {
+  touch-action: pan-y;
+}
+.pick-row .btn.sm,
+.fine-tune .btn.sm {
+  min-height: 34px;
+  padding: 0 10px;
+}

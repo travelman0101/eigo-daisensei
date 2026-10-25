@@ -1,4 +1,4 @@
-import { ApiLog, closeSettings, expect, importRange, isPlaying, login, openSettings, playerTime, test, togglePlay } from "./fixtures";
+import { ApiLog, closeSettings, expect, importRange, isPlaying, login, openMeaning, openSettings, playerTime, swipe, test, togglePlay } from "./fixtures";
 
 test.describe("取り込み", () => {
   test("URL を貼ると取り込み画面が開き、時刻指定も読み取る", async ({ page }) => {
@@ -214,15 +214,13 @@ test.describe("練習（シンプルな操作）", () => {
     await expect(page.locator(".now")).toContainText("2 /");
   });
 
-  test("字幕の右半分を 2 回タップで +N 秒、左半分で −N 秒（秒数は ⚙ で変えられる）", async ({ page }) => {
+  test("字幕を左へ払うと +N 秒、右へ払うと −N 秒（秒数は ⚙ で変えられる）。タップは待たずに反応", async ({ page }) => {
     await login(page);
     await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
     await togglePlay(page);
     await page.waitForTimeout(1000);
-    const area = page.locator(".gesture");
-    const box = (await area.boundingBox())!;
     const t0 = await playerTime(page);
-    await area.dblclick({ position: { x: box.width * 0.85, y: 10 } });
+    await swipe(page, "left");
     await expect(page.locator(".seek-bubble")).toHaveText("+5秒");
     const t1 = await playerTime(page);
     expect(t1 - t0).toBeGreaterThan(4500);
@@ -230,15 +228,86 @@ test.describe("練習（シンプルな操作）", () => {
     await sheet.getByRole("button", { name: "3 秒" }).click();
     await closeSettings(page);
     const t2 = await playerTime(page);
-    await area.dblclick({ position: { x: box.width * 0.15, y: 10 } });
+    await swipe(page, "right");
     const t3 = await playerTime(page);
     expect(t2 - t3).toBeGreaterThan(2500);
     expect(t2 - t3).toBeLessThan(3600);
     expect(await isPlaying(page)).toBe(true);
-    // a single tap on a word still opens the dictionary
+    // a swipe never picks a word
+    await expect(page.getByRole("button", { name: "この部分をくり返す" })).toHaveCount(0);
+    // a tap on a word picks it at once (no AI); the meaning opens only when asked
     await page.locator(".now .w").first().click();
-    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByRole("button", { name: "この部分をくり返す" })).toBeVisible({ timeout: 250 });
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.getByRole("button", { name: "意味を調べる" }).click();
     await expect(page.getByRole("dialog")).toContainText("動画での発言", { timeout: 15_000 });
+  });
+
+  test("単語を 2 つタップして間を選び、その部分だけをくり返す。始め・終わりを 0.1 秒ずつ直せて、再読み込みでも戻る", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    await page.getByRole("button", { name: "わかった" }).click();
+    await page.locator(".now .w").nth(1).click();
+    await page.locator(".now .w").nth(3).click();
+    await expect(page.locator(".now .w.sel")).toHaveCount(3);
+    await page.getByRole("button", { name: "この部分をくり返す" }).click();
+    await expect(page.getByText(/」をくり返し中/)).toBeVisible();
+    expect(await isPlaying(page)).toBe(true);
+    // it stays inside the phrase (well under a sentence)
+    const seen: number[] = [];
+    for (let k = 0; k < 12; k++) {
+      await page.waitForTimeout(250);
+      seen.push(await playerTime(page));
+    }
+    const span = Math.max(...seen) - Math.min(...seen);
+    expect(span).toBeLessThan(3000);
+    expect(seen.some((v, i) => i > 0 && v < seen[i - 1]!)).toBe(true); // it went back to the start
+    // fine-tune both edges; the start is heard at once
+    await page.getByRole("button", { name: "始めを0.1秒早く" }).click();
+    await page.getByRole("button", { name: "終わりを0.1秒遅く" }).click();
+    await page.waitForTimeout(900); // the fine-tuned edges are saved
+    await page.reload();
+    await expect(page.getByText(/」をくり返し中/)).toBeVisible();
+    expect(await isPlaying(page)).toBe(false); // restored, waiting at the start of the phrase
+    await togglePlay(page);
+    await page.waitForTimeout(2500);
+    expect(await isPlaying(page)).toBe(true);
+    await page.getByRole("button", { name: "解除" }).click();
+    await expect(page.getByText(/」をくり返し中/)).toHaveCount(0);
+    await page.waitForTimeout(900);
+    await page.reload();
+    await expect(page.locator(".now")).toBeVisible();
+    await expect(page.getByText(/くり返し中/)).toHaveCount(0);
+  });
+
+  test("🔁 のあと一文練習に切り替えると、一文練習の反復回数・待ち時間に戻る", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
+    await togglePlay(page);
+    await page.getByRole("button", { name: "この文をくり返す" }).click();
+    await expect(page.getByRole("button", { name: "この文をくり返す" })).toHaveAttribute("aria-pressed", "true");
+    const sheet = await openSettings(page);
+    await sheet.getByRole("tab", { name: /区切ってまねる/ }).click();
+    await sheet.getByRole("button", { name: "一文", exact: true }).click();
+    await closeSettings(page);
+    await togglePlay(page);
+    if (!(await isPlaying(page))) await togglePlay(page);
+    // the wait of one-sentence practice comes back (an endless seamless loop would never wait)
+    await expect(page.getByText(/話してみよう/)).toBeVisible({ timeout: 12_000 });
+  });
+
+  test("続きから：文の途中の位置も戻る（止めた位置は待たずに保存）", async ({ page }) => {
+    await login(page);
+    await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
+    await togglePlay(page);
+    await page.waitForTimeout(2500);
+    await togglePlay(page);
+    const at = await playerTime(page);
+    // reload right away: the pause was written at once
+    await page.reload();
+    await expect(page.locator(".now")).toBeVisible();
+    await page.waitForTimeout(800);
+    expect(Math.abs((await playerTime(page)) - at)).toBeLessThan(400);
   });
 
   test("前の文へ・次の文へ・字幕タップのあとも流れ続ける", async ({ page }) => {
@@ -367,7 +436,7 @@ test.describe("単語帳とテスト", () => {
   test("単語・熟語を保存し、カードと穴埋めでテストできる", async ({ page }) => {
     await login(page);
     await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
-    await page.locator(".now .w").nth(1).click();
+    await openMeaning(page, 1);
     const sheet = page.getByRole("dialog");
     await expect(sheet.getByText("（意味）")).toBeVisible();
     await expect(sheet.getByText("動画での発言")).toBeVisible();
@@ -406,7 +475,7 @@ test.describe("単語帳とテスト", () => {
   test("アカウントごとに単語帳・教材が分かれる", async ({ page }) => {
     await login(page, `sepA${Date.now()}`);
     await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
-    await page.locator(".now .w").first().click();
+    await openMeaning(page);
     await page.getByRole("dialog").getByRole("button", { name: "単語帳に保存" }).click();
     await expect(page.getByRole("dialog").getByRole("button", { name: "✓ 単語帳に保存済み" })).toBeVisible();
     await page.goto("/settings");
@@ -477,7 +546,7 @@ test.describe("ダブルタップの秒数（動画ごと）と字幕の広さ",
     await expect(sheet.getByText("この動画は初期値の 5 秒")).toBeVisible();
   });
 
-  test("好きな秒数：不正な値は保存しない。7.5 秒なら表示と移動が一致し、タッチの 2 回タップで移動は 1 回だけ", async ({ page }) => {
+  test("好きな秒数：不正な値は保存しない。7.5 秒なら表示と移動が一致し、1 回払うと移動は 1 回だけ", async ({ page }) => {
     await login(page);
     await importRange(page, "mockPunct01", "0:00", "1:00", { keepEdges: true });
     const sheet = await openSettings(page);
@@ -502,10 +571,7 @@ test.describe("ダブルタップの秒数（動画ごと）と字幕の広さ",
     });
     await togglePlay(page);
     await page.waitForTimeout(1200);
-    const box = (await page.locator(".gesture").boundingBox())!;
-    await page.touchscreen.tap(box.x + box.width * 0.85, box.y + 20);
-    await page.waitForTimeout(120);
-    await page.touchscreen.tap(box.x + box.width * 0.85, box.y + 20);
+    await swipe(page, "left");
     await expect(page.locator(".seek-bubble")).toHaveText("+7.5秒");
     await page.waitForTimeout(500);
     const seeks = await page.evaluate(() => (window as unknown as { __seeks: { from: number; to: number }[] }).__seeks);
@@ -516,9 +582,7 @@ test.describe("ダブルタップの秒数（動画ごと）と字幕の広さ",
     // at the end of the range the move is shorter, and the bubble says so
     await page.evaluate(() => (window as unknown as { __player: { seek(ms: number): void } }).__player.seek(57_000));
     await page.waitForTimeout(200);
-    await page.touchscreen.tap(box.x + box.width * 0.85, box.y + 20);
-    await page.waitForTimeout(120);
-    await page.touchscreen.tap(box.x + box.width * 0.85, box.y + 20);
+    await swipe(page, "left");
     await expect(page.locator(".seek-bubble")).toContainText("区間の端");
   });
 
@@ -584,7 +648,7 @@ test.describe("保存と復元", () => {
   test("AI や通信が止まっても保存済み教材と単語テストが使える", async ({ page }) => {
     await login(page);
     await importRange(page, "mockPunct01", "0:00", "0:30", { keepEdges: true });
-    await page.locator(".now .w").first().click();
+    await openMeaning(page);
     await page.getByRole("dialog").getByRole("button", { name: "単語帳に保存" }).click();
     await page.getByRole("dialog").getByRole("button", { name: "閉じる", exact: true }).click();
     const url = page.url();

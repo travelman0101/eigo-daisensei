@@ -43,9 +43,11 @@ export function Practice({ id }: { id: string }) {
   const [ab, setAb] = useState<{ a: number | null }>({ a: null });
   const [tapHint, setTapHint] = useState(false);
   const [bubble, setBubble] = useState<{ side: "l" | "r"; text: string; at: number } | null>(null);
-  const lastTap = useRef<{ at: number; side: "l" | "r" } | null>(null);
-  const tapTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const bypass = useRef(false);
+  // words picked in the subtitles (tap one, tap another for a range) → repeat them or look them up
+  const [pick, setPick] = useState<{ s: number; anchor: number; from: number; to: number } | null>(null);
+  const swipe = useRef<{ x: number; y: number; at: number; id: number } | null>(null);
+  const swallowClick = useRef(false);
+  const pending = useRef<Progress | null>(null);
   const navTarget = useRef<{ i: number; at: number } | null>(null);
   // the subtitle area fills the space left on screen and scrolls; it keeps the previous sentence at its top
   const subs = useRef<HTMLDivElement>(null);
@@ -145,20 +147,47 @@ export function Practice({ id }: { id: string }) {
     const next = { ...cur, ...patch, updatedAt: Date.now() };
     progressRef.current = next;
     setProgress(next);
+    pending.current = next;
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      guard(db().put("progress", next))
-        .then(() => markDirty("progress", next.materialId))
-        .catch((e: Error) => toast(e.message, "error"));
-    }, 600);
+    saveTimer.current = setTimeout(() => flushProgress(), 600);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toast]);
+  /** Writes the latest progress now (also when the page is hidden or closed). */
+  const flushProgress = () => {
+    const next = pending.current;
+    if (!next) return;
+    pending.current = null;
+    clearTimeout(saveTimer.current);
+    guard(db().put("progress", next))
+      .then(() => markDirty("progress", next.materialId))
+      .catch((e: Error) => toast(e.message, "error"));
+  };
+  // closing the tab, switching apps or leaving the screen keeps the exact position
+  useEffect(() => {
+    const save = () => {
+      if (player.current && progressRef.current) persistProgress({ pos: Math.round(player.current.time()), lastAt: Date.now() });
+      flushProgress();
+    };
+    const onVis = () => document.visibilityState === "hidden" && save();
+    addEventListener("pagehide", save);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      removeEventListener("pagehide", save);
+      document.removeEventListener("visibilitychange", onVis);
+      save();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [m?.id]);
 
   // player + engine
   useEffect(() => {
     if (!m || !settings || !holder.current) return;
     let alive = true;
     const startSentence = m.sentences[progressRef.current?.sentenceIndex ?? 0] ?? m.sentences[0];
-    createYouTube(holder.current, m.videoId, Math.max(0, (startSentence?.start ?? m.start) - 500), (e) => {
+    const saved = progressRef.current;
+    const pos = saved?.pos != null && saved.pos >= m.start - 2000 && saved.pos <= m.end ? saved.pos : null;
+    const startAt = saved?.loop?.a ?? pos ?? (startSentence?.start ?? m.start) - 500;
+    createYouTube(holder.current, m.videoId, Math.max(0, startAt), (e) => {
       if (e.type === "ready") setReady(true);
       if (e.type === "error") setPlayerError(e.message);
       if (e.type === "state" && e.playing) setTapHint(false);
@@ -172,6 +201,9 @@ export function Practice({ id }: { id: string }) {
         engine.current = eng;
         eng.setFlow(settings.practice === "flow");
         eng.setUnits(units, progressRef.current?.sentenceIndex ?? 0);
+        // the player opens at the saved spot (YouTube starts at whole seconds; a seek here would start playback)
+        const lp = progressRef.current?.loop;
+        if (lp) eng.setAB(lp.a, lp.b, false);
         setReady(true);
       })
       .catch((e: Error) => setPlayerError(e.message));
@@ -223,11 +255,17 @@ export function Practice({ id }: { id: string }) {
   const curUnit = es ? units[es.unit] : undefined;
   const curSentence = curUnit?.sentence ?? progress?.sentenceIndex ?? 0;
   useEffect(() => {
-    if (progressRef.current && curSentence !== progressRef.current.sentenceIndex) persistProgress({ sentenceIndex: curSentence, lastAt: Date.now() });
+    if (progressRef.current && curSentence !== progressRef.current.sentenceIndex)
+      persistProgress({ sentenceIndex: curSentence, lastAt: Date.now(), ...(player.current ? { pos: Math.round(player.current.time()) } : {}) });
   }, [curSentence, persistProgress]);
   const lastPhase = useRef<string>("idle");
   useEffect(() => {
     if (es?.phase === "playing" && lastPhase.current !== "playing") persistProgress({ plays: (progressRef.current?.plays ?? 0) + 1, lastAt: Date.now() });
+    // a pause is written at once (not after the usual short wait), so closing right after it keeps the spot
+    if (es?.phase === "idle" && lastPhase.current === "playing" && player.current) {
+      persistProgress({ pos: Math.round(player.current.time()) });
+      flushProgress();
+    }
     lastPhase.current = es?.phase ?? "idle";
   }, [es?.phase, persistProgress]);
 
@@ -322,50 +360,80 @@ export function Practice({ id }: { id: string }) {
     playSentence(target);
   };
 
-  /**
-   * Taps on the subtitle area: a double tap on the left / right half moves −/+ N seconds. A single tap
-   * keeps its normal meaning (jump to a sentence, open a word) after a short wait for a second tap.
-   */
-  const onSubtitleTap = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (bypass.current) {
-      bypass.current = false;
-      return;
-    }
-    const box = e.currentTarget.getBoundingClientRect();
-    const side: "l" | "r" = e.clientX < box.left + box.width / 2 ? "l" : "r";
-    const now = performance.now();
-    e.stopPropagation();
-    e.preventDefault();
-    if (lastTap.current && now - lastTap.current.at < 300 && lastTap.current.side === side) {
-      clearTimeout(tapTimer.current);
-      lastTap.current = null;
-      const ms = seek.seconds * 1000 * (side === "l" ? -1 : 1);
-      const moved = engine.current?.seekBy(ms) ?? 0;
-      // at the edge of the range (or of A–B) the move is shorter: say so instead of the setting
-      const edge = Math.abs(moved - ms) > 150;
-      const secs = edge ? Math.abs(moved) / 1000 : seek.seconds;
-      setBubble({ side, text: `${side === "l" ? "−" : "+"}${formatSeconds(secs)}秒${edge ? (es?.ab ? "（A–B の端）" : "（区間の端）") : ""}`, at: now });
-      return;
-    }
-    lastTap.current = { at: now, side };
-    const target = e.target as HTMLElement;
-    // remember what was tapped: during playback the sentence may change (and the element be replaced) before the wait ends
-    const word = target.closest<HTMLElement>("[data-wi]");
-    const card = target.closest<HTMLElement>("[data-i]");
-    clearTimeout(tapTimer.current);
-    tapTimer.current = setTimeout(() => {
-      lastTap.current = null;
-      if (target.isConnected) {
-        bypass.current = true;
-        target.click();
-      } else if (word) tapWord(Number(word.dataset.si), Number(word.dataset.wi));
-      else if (card) playSentence(Number(card.dataset.i));
-    }, 300);
+  /** ±N seconds; the bubble says how far it really went (less at the edge of the range or of the loop). */
+  const seekStep = (dir: 1 | -1) => {
+    const ms = seek.seconds * 1000 * dir;
+    const moved = engine.current?.seekBy(ms) ?? 0;
+    const edge = Math.abs(moved - ms) > 150;
+    const secs = edge ? Math.abs(moved) / 1000 : seek.seconds;
+    setBubble({ side: dir < 0 ? "l" : "r", text: `${dir < 0 ? "−" : "+"}${formatSeconds(secs)}秒${edge ? (es?.ab ? "（くり返しの端）" : "（区間の端）") : ""}`, at: performance.now() });
   };
-
-  const tapWord = (si: number, wi: number) => {
+  /**
+   * A sideways swipe on the subtitles moves ±N seconds: to the left goes ahead, to the right goes back
+   * (like pulling the timeline). Taps are not delayed: words are picked, other sentences jump at once.
+   */
+  const onSwipeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    swipe.current = { x: e.clientX, y: e.clientY, at: performance.now(), id: e.pointerId };
+    swallowClick.current = false;
+  };
+  const onSwipeEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    const s0 = swipe.current;
+    swipe.current = null;
+    if (!s0 || s0.id !== e.pointerId) return;
+    const dx = e.clientX - s0.x;
+    const dy = e.clientY - s0.y;
+    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5 || performance.now() - s0.at > 900) return;
+    swallowClick.current = true;
+    seekStep(dx < 0 ? 1 : -1);
+  };
+  /** The tap that ends a swipe is not a tap on a word. */
+  const onSubtitleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (swallowClick.current) {
+      swallowClick.current = false;
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  };
+  /** Tap a word to pick it; tap another one in the same sentence for the words in between. */
+  const tapWord = (si: number, wi: number) =>
+    setPick((p) => {
+      if (!p || p.s !== si) return { s: si, anchor: wi, from: wi, to: wi };
+      if (p.from === p.to && p.from === wi) return null;
+      return { s: si, anchor: p.anchor, from: Math.min(p.anchor, wi), to: Math.max(p.anchor, wi) };
+    });
+  const pickText = (p: { s: number; from: number; to: number }) => m!.sentences[p.s]!.words.slice(p.from, p.to + 1).map((w) => w.w).join(" ");
+  /** The dictionary opens only when asked (it may use the AI), for at most 6 words. */
+  const openMeaning = () => {
+    if (!pick) return;
     engine.current?.pause();
-    setSheet({ s: si, from: wi, to: wi });
+    setSheet({ s: pick.s, from: pick.from, to: Math.min(pick.to, pick.from + 5) });
+    setPick(null);
+  };
+  /** Repeat the picked words: their caption times (+ the usual margins and corrections), fine-tunable. */
+  const repeatPick = () => {
+    if (!pick || !m || !settings) return;
+    const sen = m.sentences[pick.s]!;
+    const adj = progress?.adjust[sen.id] ?? { s: 0, e: 0 };
+    const a = Math.round(sen.words[pick.from]!.start + offset - settings.padPre + (pick.from === 0 ? adj.s : 0));
+    const b = Math.round(sen.words[pick.to]!.end + offset + settings.padPost + (pick.to === sen.words.length - 1 ? adj.e : 0));
+    engine.current?.setAB(Math.max(0, a), b);
+    persistProgress({ loop: { a: Math.max(0, a), b, sentenceId: sen.id, from: pick.from, to: pick.to } });
+    setPick(null);
+  };
+  const releaseLoop = () => {
+    engine.current?.clearAB();
+    setAb({ a: null });
+    persistProgress({ loop: undefined });
+  };
+  /** ±0.1 s on either edge of the running loop; saved with the material. */
+  const nudge = (edge: "a" | "b", d: number) => {
+    const cur = es?.ab;
+    if (!cur) return;
+    const a = edge === "a" ? cur.a + d : cur.a;
+    const b = edge === "b" ? cur.b + d : cur.b;
+    if (b - a < 300 || a < 0) return;
+    engine.current?.adjustAB(a, b);
+    persistProgress({ loop: { ...(progress?.loop ?? {}), a, b } });
   };
 
   const renderEn = (si: number, big: boolean) => {
@@ -379,7 +447,11 @@ export function Practice({ id }: { id: string }) {
           if (chunkStarts.has(wi)) ci++;
           const showSep = unitKind === "chunk" && wi > 0 && chunkStarts.has(wi);
           const cls = unitKind === "chunk" && isCur && chunkIdx >= 0 ? (ci === chunkIdx ? "chunk-on" : "chunk-off") : "";
-          const sel = sheet && sheet.s === si && wi >= sheet.from && wi <= sheet.to;
+          const lp = es?.ab ? progress?.loop : undefined;
+          const sel =
+            (sheet && sheet.s === si && wi >= sheet.from && wi <= sheet.to) ||
+            (pick && pick.s === si && wi >= pick.from && wi <= pick.to) ||
+            (lp?.sentenceId === sen.id && wi >= (lp.from ?? 0) && wi <= (lp.to ?? -1));
           // in the flow view a neighbouring sentence is one big target that jumps there; words open the dictionary only in the current one
           if (flow && settings.view === "current" && !isCur)
             return (
@@ -436,7 +508,7 @@ export function Practice({ id }: { id: string }) {
 
       {tip && (
         <div className="flash card small" style={{ margin: "0 0 8px" }}>
-          動画をタップすると再生／停止。字幕の左半分を 2 回タップで {formatSeconds(seek.seconds)} 秒戻る、右半分で進む（秒数は ⚙ で動画ごとに変更）。動画の上を 2 回タップしたときは YouTube 自体の機能で約 10 秒動きます。🔁 で今の文をくり返します。単語をタップすると意味が出ます。練習の段階・一文練習・録音などは ⚙ にあります。
+          動画をタップすると再生／停止。字幕を左へ払うと {formatSeconds(seek.seconds)} 秒進み、右へ払うと戻ります（秒数は ⚙ で動画ごとに変更）。単語をタップして選び、別の単語をタップするとその間を選べます。下に出る「🔁 くり返す」でその部分だけをくり返し、「📖 意味」で意味を調べます。🔁 くり返す（下のバー）は今の文をくり返します。練習の段階・一文練習・録音などは ⚙ にあります。
           <div style={{ marginTop: 6 }}>
             <button className="btn sm" onClick={() => (setTip(false), void setKv("seenPracticeTip", true))}>
               わかった
@@ -447,7 +519,10 @@ export function Practice({ id }: { id: string }) {
       <div
         className="gesture"
         ref={subs}
-        onClickCapture={onSubtitleTap}
+        onClickCapture={onSubtitleClick}
+        onPointerDown={onSwipeStart}
+        onPointerUp={onSwipeEnd}
+        onPointerCancel={() => (swipe.current = null)}
         onTouchMove={() => (userScrollAt.current = performance.now())}
         onWheel={() => (userScrollAt.current = performance.now())}
       >
@@ -533,7 +608,7 @@ export function Practice({ id }: { id: string }) {
 
       </div>
       <p className="small muted tap-hint" aria-hidden>
-        ← 字幕を2回タップで −{formatSeconds(seek.seconds)}秒 ｜ +{formatSeconds(seek.seconds)}秒 →
+        字幕を ← に払う +{formatSeconds(seek.seconds)}秒 ｜ → に払う −{formatSeconds(seek.seconds)}秒
       </p>
       {bubble && performance.now() - bubble.at < 700 && <div className={`seek-bubble ${bubble.side}`}>{bubble.text}</div>}
       {m.sample && (
@@ -600,12 +675,38 @@ export function Practice({ id }: { id: string }) {
       {createPortal(
         <>
       <div className="controls glass slim" ref={bar}>
-        {es?.ab && (
-          <div className="row small" style={{ justifyContent: "center", marginBottom: 6 }}>
-            <span className="muted">A–B をくり返し中</span>
-            <button className="btn sm ghost" onClick={() => (engine.current?.clearAB(), setAb({ a: null }))}>
-              解除
+        {pick && !es?.ab && (
+          <div className="row pick-row" style={{ marginBottom: 6, gap: 6 }}>
+            <span className="small one-line grow" style={{ fontWeight: 700 }}>「{pickText(pick)}」</span>
+            <button className="btn sm primary" aria-label="この部分をくり返す" onClick={repeatPick} disabled={!ready}>
+              🔁 くり返す
             </button>
+            <button className="btn sm" aria-label="意味を調べる" onClick={openMeaning}>
+              📖 意味
+            </button>
+            <button className="btn sm ghost" aria-label="選択をやめる" onClick={() => setPick(null)}>
+              ✕
+            </button>
+          </div>
+        )}
+        {es?.ab && (
+          <div style={{ marginBottom: 6 }}>
+            <div className="row small" style={{ gap: 6 }}>
+              <span className="muted one-line grow">
+                {progress?.loop?.sentenceId ? `「${pickText({ s: Math.max(0, m.sentences.findIndex((x) => x.id === progress.loop!.sentenceId)), from: progress.loop.from ?? 0, to: progress.loop.to ?? 0 })}」をくり返し中` : "A–B をくり返し中"}
+              </span>
+              <button className="btn sm ghost" onClick={releaseLoop}>
+                解除
+              </button>
+            </div>
+            <div className="row small fine-tune" style={{ gap: 4, justifyContent: "center" }}>
+              <span className="muted">始め</span>
+              <button className="btn sm" aria-label="始めを0.1秒早く" onClick={() => nudge("a", -100)}>−0.1</button>
+              <button className="btn sm" aria-label="始めを0.1秒遅く" onClick={() => nudge("a", 100)}>+0.1</button>
+              <span className="muted" style={{ marginLeft: 6 }}>終わり</span>
+              <button className="btn sm" aria-label="終わりを0.1秒早く" onClick={() => nudge("b", -100)}>−0.1</button>
+              <button className="btn sm" aria-label="終わりを0.1秒遅く" onClick={() => nudge("b", 100)}>+0.1</button>
+            </div>
           </div>
         )}
         {es?.phase === "gap" && (
@@ -698,13 +799,15 @@ export function Practice({ id }: { id: string }) {
                   aria-label="A–B ループ"
                   onClick={() => {
                     if (es?.ab) {
-                      engine.current?.clearAB();
-                      setAb({ a: null });
+                      releaseLoop();
                     } else if (ab.a == null) {
                       setAb({ a: t });
                       toast("A を記録しました。終わりの位置でもう一度押してください");
                     } else {
-                      engine.current?.setAB(Math.min(ab.a, t), Math.max(ab.a, t));
+                      const a = Math.round(Math.min(ab.a, t));
+                      const b = Math.round(Math.max(ab.a, t));
+                      engine.current?.setAB(a, b);
+                      if (b - a >= 300) persistProgress({ loop: { a, b } });
                       setAb({ a: null });
                     }
                   }}
@@ -820,7 +923,7 @@ function SeekSetting({ seconds, saved, onChange }: { seconds: number; saved: boo
   };
   return (
     <div style={{ marginBottom: 14 }}>
-      <h2>字幕を 2 回タップで動く秒数（この動画）</h2>
+      <h2>字幕を左右に払って動く秒数（この動画）</h2>
       <div className="chips wrap" style={{ flexWrap: "wrap", marginBottom: 8 }}>
         {SEEK_PRESETS.map((v) => (
           <button key={v} className={`chip ${seconds === v ? "on" : ""}`} aria-pressed={seconds === v} onClick={() => (setError(""), onChange(v))}>

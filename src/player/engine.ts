@@ -102,7 +102,8 @@ export class Engine {
       this.pausePlayer();
       this.set({ phase: "idle", gapUntil: null });
     }
-    this.set({ continuous: on, rep: 0 });
+    // 🔁 belongs to flow: one-sentence practice uses its own repeat count and wait
+    this.set({ continuous: on, rep: 0, ...(on ? {} : { loop: false }) });
   }
 
   isFlow() {
@@ -254,13 +255,30 @@ export class Engine {
     this.playUnit(0);
   }
 
-  setAB(a: number, b: number) {
+  /**
+   * Loop a..b. With play=false (restoring a saved loop) nothing moves: the player was opened at A
+   * already, and seeking a YouTube player that has not started yet would start it.
+   */
+  setAB(a: number, b: number, play = true) {
     if (b - a < 300) return;
-    this.set({ ab: { a, b } });
+    this.set({ ab: { a, b }, loop: false });
     this.clearTimers();
+    if (!play) {
+      this.set({ phase: "idle", gapUntil: null, rep: 0 });
+      return;
+    }
     this.player.seek(a);
     this.play();
     this.set({ phase: "playing", rep: 0 });
+  }
+
+  /** Fine-tune the running loop: a new start is heard at once, a new end applies on the next pass. */
+  adjustAB(a: number, b: number) {
+    const cur = this.state.ab;
+    if (!cur || b - a < 300) return;
+    this.set({ ab: { a, b } });
+    this.clearTimers();
+    if (a !== cur.a || this.player.time() > b) this.player.seek(a);
   }
   clearAB() {
     // flow continues from where the loop is now; one-sentence practice keeps its unit.
